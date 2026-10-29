@@ -4,7 +4,6 @@
     <uses-feature android:name="android.hardware.telephony" android:required="false"/>
     <application
         android:label="TutorDesk"
-        android:usesCleartextTraffic="true"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

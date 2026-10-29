@@ -5,8 +5,12 @@ class SessionStore {
   static const _serverKey = 'server_url';
   static const _tokenKey = 'auth_token';
 
-  /// This PC's address on the local Wi‑Fi; editable on the login screen.
-  static const defaultServer = 'http://192.168.0.117:4000';
+  /// Live backend; editable on the login screen. Override at build time with
+  /// `--dart-define=API_URL=http://192.168.0.117:4000` for a local server.
+  static const defaultServer = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'https://tutordesk-backend.onrender.com',
+  );
 
   Future<({String server, String? token})> load() async {
     final prefs = await SharedPreferences.getInstance();
