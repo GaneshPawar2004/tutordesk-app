@@ -6,6 +6,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import '../fees/fee_widgets.dart';
@@ -114,14 +115,21 @@ class _PromotionScreenState extends State<PromotionScreen> {
     );
     if (!ok || !mounted) return;
     final fee = AmountField.parse(_fee.text);
-    final result = app.promote(
-      from: app.academic.yearById(_fromYearId!),
-      to: to,
-      toClass: toClass,
-      studentIds: _selected.toList(),
-      annualFee: fee > 0 ? fee : null,
-      installments: _installments,
-    );
+    final PromotionResult result;
+    try {
+      result = await app.promote(
+        from: app.academic.yearById(_fromYearId!),
+        to: to,
+        toClass: toClass,
+        studentIds: _selected.toList(),
+        annualFee: fee > 0 ? fee : null,
+        installments: _installments,
+      );
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _done = true;
       _promotedCount = result.promoted.length;

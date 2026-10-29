@@ -97,6 +97,7 @@ class StaffMember {
     required this.joinedOn,
     this.isActive = true,
     this.accountStatus = AccountStatus.active,
+    this.inviteCode,
   });
 
   final String id;
@@ -109,6 +110,10 @@ class StaffMember {
   DateTime joinedOn;
   bool isActive;
   AccountStatus accountStatus;
+
+  /// One-time code the admin shares so the staff member can set a password.
+  /// Only present for the admin, and only until the invitation is accepted.
+  String? inviteCode;
 
   String get firstName => name.split(' ').first;
 

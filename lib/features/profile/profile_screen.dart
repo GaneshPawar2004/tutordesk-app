@@ -18,16 +18,17 @@ class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   Future<void> _logout(BuildContext context) async {
+    final app = context.appRead;
     final ok = await ConfirmationDialog.show(
       context,
       title: 'Log out?',
-      message:
-          'You will return to the preview selection. Demo changes made in this session are kept until the app restarts.',
+      message: app.isRemote
+          ? 'You will need your mobile number (or email) and password to log in again.'
+          : 'You will return to the preview selection. Demo changes made in this session are kept until the app restarts.',
       confirmLabel: 'Log out',
       icon: Icons.logout_rounded,
     );
     if (!ok || !context.mounted) return;
-    final app = context.appRead;
     Navigator.of(context).popUntil((r) => r.isFirst);
     app.signOut();
   }
@@ -183,7 +184,9 @@ class ProfileScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         StatusChip(
-                          label: isAdmin ? 'Admin preview' : 'Staff preview',
+                          label: app.isRemote
+                              ? (isAdmin ? 'Admin' : 'Staff')
+                              : (isAdmin ? 'Admin preview' : 'Staff preview'),
                           color: isAdmin
                               ? AppColors.accentPressed
                               : AppColors.info,
@@ -230,21 +233,23 @@ class ProfileScreen extends StatelessWidget {
             if (i > 0) const InsetDivider(indent: 76),
             settings[i],
           ],
-          const SectionHeader(
-            title: 'Demo',
-            padding: EdgeInsets.fromLTRB(Gap.page, Gap.lg, Gap.page, 4),
-          ),
-          NavRow(
-            icon: Icons.switch_account_outlined,
-            title: 'Switch preview role',
-            subtitle: 'Return to the admin / staff selector',
-            color: AppColors.info,
-            onTap: () {
-              final a = context.appRead;
-              Navigator.of(context).popUntil((r) => r.isFirst);
-              a.signOut();
-            },
-          ),
+          if (!app.isRemote) ...[
+            const SectionHeader(
+              title: 'Demo',
+              padding: EdgeInsets.fromLTRB(Gap.page, Gap.lg, Gap.page, 4),
+            ),
+            NavRow(
+              icon: Icons.switch_account_outlined,
+              title: 'Switch preview role',
+              subtitle: 'Return to the admin / staff selector',
+              color: AppColors.info,
+              onTap: () {
+                final a = context.appRead;
+                Navigator.of(context).popUntil((r) => r.isFirst);
+                a.signOut();
+              },
+            ),
+          ],
           const SizedBox(height: Gap.lg),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: Gap.page),
@@ -258,7 +263,9 @@ class ProfileScreen extends StatelessWidget {
           const SizedBox(height: Gap.md),
           Center(
             child: Text(
-              'Role previews are for the demo only and are not security.',
+              app.isRemote
+                  ? 'Signed in to ${app.tuition.name}'
+                  : 'Role previews are for the demo only and are not security.',
               style: AppTextStyles.caption.copyWith(
                 fontSize: 12,
                 color: AppColors.textTertiary,

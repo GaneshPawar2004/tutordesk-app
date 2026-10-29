@@ -36,18 +36,21 @@ class _TuitionInfoScreenState extends State<TuitionInfoScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final app = context.appRead;
-    app.tuition
-      ..name = _name.text.trim()
-      ..city = _city.text.trim()
-      ..address = _address.text.trim()
-      ..phone = _phone.text.trim()
-      ..email = _email.text.trim();
-    app.touch();
-    Navigator.of(context).pop();
-    AppToast.show(context, 'Tuition information saved');
+    final ok = await runAction(
+      context,
+      () => app.updateTuition(
+        name: _name.text.trim(),
+        city: _city.text.trim(),
+        address: _address.text.trim(),
+        phone: _phone.text.trim(),
+        email: _email.text.trim(),
+      ),
+      success: 'Tuition information saved',
+    );
+    if (ok && mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -94,8 +97,7 @@ class _TuitionInfoScreenState extends State<TuitionInfoScreen> {
             ),
             const SizedBox(height: Gap.lg),
             const DemoNotice(
-              text:
-                  'The tuition name is used in parent messages. Changes last until the app restarts.',
+              text: 'The tuition name is used in parent messages.',
             ),
           ],
         ),
@@ -132,29 +134,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final app = context.appRead;
-    if (app.isAdmin) {
-      app.admin
-        ..name = _name.text.trim()
-        ..email = _email.text.trim()
-        ..phone = _phone.text.trim();
-      app.touch();
-    } else {
-      final m = app.currentStaff!;
-      app.staff.update(
-        m,
+    final ok = await runAction(
+      context,
+      () => app.updateProfile(
         name: _name.text.trim(),
         email: _email.text.trim(),
         phone: _phone.text.trim(),
-        designation: m.designation,
-        classIds: m.assignedClassIds,
-        isActive: m.isActive,
-      );
-    }
-    Navigator.of(context).pop();
-    AppToast.show(context, 'Profile updated');
+      ),
+      success: 'Profile updated',
+    );
+    if (ok && mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -194,7 +186,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             const SizedBox(height: Gap.lg),
             const DemoNotice(
               text:
-                  'Password and sign-in settings will be available once real accounts are connected.',
+                  'To change your password, ask the admin to create a new invite code for you.',
             ),
           ],
         ),

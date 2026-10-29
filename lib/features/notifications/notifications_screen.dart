@@ -44,7 +44,7 @@ class NotificationsScreen extends StatelessWidget {
 
   void _open(BuildContext context, AppNotification n) {
     final app = context.appRead;
-    app.notifications.markRead(n);
+    app.markNotificationRead(n).catchError((_) {});
     switch (n.type) {
       case NotificationType.attendance:
         Navigator.of(context).popUntil((r) => r.isFirst);
@@ -84,8 +84,7 @@ class NotificationsScreen extends StatelessWidget {
       actions: [
         if (unread > 0)
           TextButton(
-            onPressed: () =>
-                app.notifications.markAllRead(isAdmin: app.isAdmin),
+            onPressed: () => runAction(context, app.markAllNotificationsRead),
             child: const Text('Mark all read'),
           ),
       ],

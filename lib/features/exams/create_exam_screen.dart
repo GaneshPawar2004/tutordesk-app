@@ -7,6 +7,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import 'exam_detail_screen.dart';
@@ -33,6 +34,7 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
   DateTime _date = DateTime.now();
   var _isDraft = false;
   var _showSubjectError = false;
+  var _saving = false;
 
   bool get _isEdit => widget.exam != null;
 
@@ -85,7 +87,7 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     final app = context.appRead;
     setState(() => _showSubjectError = _selected.isEmpty);
     final valid = _formKey.currentState!.validate();
@@ -106,29 +108,50 @@ class _CreateExamScreenState extends State<CreateExamScreen> {
           maxMarks: double.parse(_controllerFor(s.id).text),
         ),
     ];
-    if (_isEdit) {
-      app.exams.update(
-        widget.exam!,
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      if (_isEdit) {
+        await app.updateExam(
+          widget.exam!,
+          name: _name.text.trim(),
+          classId: _classId!,
+          date: _date,
+          subjects: subjects,
+          description: _description.text.trim(),
+          isDraft: _isDraft,
+        );
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        AppToast.show(context, 'Exam updated');
+        return;
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
+    }
+    final Exam exam;
+    try {
+      exam = await app.createExam(
         name: _name.text.trim(),
         classId: _classId!,
         date: _date,
         subjects: subjects,
         description: _description.text.trim(),
         isDraft: _isDraft,
+        yearId: _yearId,
       );
-      Navigator.of(context).pop();
-      AppToast.show(context, 'Exam updated');
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
       return;
     }
-    final exam = app.createExam(
-      name: _name.text.trim(),
-      classId: _classId!,
-      date: _date,
-      subjects: subjects,
-      description: _description.text.trim(),
-      isDraft: _isDraft,
-      yearId: _yearId,
-    );
+    if (!mounted) return;
     replacePage(context, ExamDetailScreen(examId: exam.id));
     AppToast.show(context, _isDraft ? 'Exam saved as draft' : 'Exam scheduled');
   }

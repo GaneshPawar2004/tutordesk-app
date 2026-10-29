@@ -94,7 +94,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     super.didChangeDependencies();
     if (!widget.isEdit && _yearId == null) {
       final app = context.appRead;
-      _studentId = app.students.nextStudentId();
+      _studentId = app.nextStudentIdPreview;
       _yearId = app.currentYear.id;
     }
   }
@@ -157,9 +157,6 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       return;
     }
     setState(() => _saving = true);
-    // A short pause so the saving state is visible; nothing is written to disk.
-    await Future<void>.delayed(const Duration(milliseconds: 450));
-    if (!mounted) return;
 
     String? opt(TextEditingController c) =>
         c.text.trim().isEmpty ? null : c.text.trim();
@@ -175,41 +172,61 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
         ..altPhone = opt(_altPhone)
         ..address = opt(_address);
       if (app.isAdmin) s.isActive = _active;
-      app.students.update(s);
+      try {
+        await app.saveStudent(s);
+      } on ApiException catch (e) {
+        if (mounted) {
+          setState(() => _saving = false);
+          AppToast.show(context, e.message, type: ToastType.error);
+        }
+        return;
+      }
+      if (!mounted) return;
+      _dirty = false;
       Navigator.of(context).pop();
       AppToast.show(context, 'Student details updated');
       return;
     }
 
-    final student = app.addStudent(
-      AdmissionDraft(
-        studentId: _studentId,
-        firstName: _first.text.trim(),
-        lastName: _last.text.trim(),
-        dateOfBirth: _dob!,
-        gender: _gender,
-        parentName: _parent.text.trim(),
-        parentPhone: _phone.text.trim(),
-        altPhone: opt(_altPhone),
-        address: opt(_address),
-        yearId: _yearId!,
-        classId: _classId!,
-        enrolledOn: _enrolledOn,
-        active: _active,
-        fee: app.isAdmin && _withFee
-            ? FeeDraft(
-                annualFee: _feeValue,
-                installments: _installmentCount,
-                frequency: _frequency,
-                firstDueDate: _firstDue,
-                initialAmount: _initialValue,
-                paymentDate: _paymentDate,
-                method: _method,
-                note: opt(_note),
-              )
-            : null,
-      ),
-    );
+    final Student student;
+    try {
+      student = await app.addStudent(
+        AdmissionDraft(
+          studentId: _studentId,
+          firstName: _first.text.trim(),
+          lastName: _last.text.trim(),
+          dateOfBirth: _dob!,
+          gender: _gender,
+          parentName: _parent.text.trim(),
+          parentPhone: _phone.text.trim(),
+          altPhone: opt(_altPhone),
+          address: opt(_address),
+          yearId: _yearId!,
+          classId: _classId!,
+          enrolledOn: _enrolledOn,
+          active: _active,
+          fee: app.isAdmin && _withFee
+              ? FeeDraft(
+                  annualFee: _feeValue,
+                  installments: _installmentCount,
+                  frequency: _frequency,
+                  firstDueDate: _firstDue,
+                  initialAmount: _initialValue,
+                  paymentDate: _paymentDate,
+                  method: _method,
+                  note: opt(_note),
+                )
+              : null,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _saving = false;
       _dirty = false;
@@ -242,7 +259,9 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Saved in this session only — demo data resets when the app restarts.',
+              app.isRemote
+                  ? 'Saved to your tuition account.'
+                  : 'Saved in this session only — demo data resets when the app restarts.',
               textAlign: TextAlign.center,
               style: AppTextStyles.caption.copyWith(fontSize: 12),
             ),
@@ -402,6 +421,15 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
               ),
               if (!isEdit) ...[
                 const _FormSection(letter: 'B', title: 'Enrollment'),
+                if (app.academic.runningClasses.isEmpty) ...[
+                  const DemoNotice(
+                    icon: Icons.class_outlined,
+                    color: AppColors.warning,
+                    text:
+                        'There are no classes yet. Create one first in More → Classes, then come back.',
+                  ),
+                  const SizedBox(height: Gap.md),
+                ],
                 SelectField<String>(
                   label: 'Academic year',
                   value: _yearId,

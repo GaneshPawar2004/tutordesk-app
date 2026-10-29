@@ -134,8 +134,10 @@ class _MessagesScreenState extends State<MessagesScreen> {
                               ),
                               Text(
                                 sms.mode == SendingMode.androidDevice
-                                    ? '${sms.deviceName} · synced ${Fmt.relative(sms.lastSync)}'
-                                    : 'Mock configuration',
+                                    ? sms.lastSync.year < 2001
+                                          ? '${sms.deviceName} · not online yet'
+                                          : '${sms.deviceName} · online ${Fmt.relative(sms.lastSync)}'
+                                    : 'Parents do not receive real SMS',
                                 style: AppTextStyles.caption.copyWith(
                                   fontSize: 12,
                                 ),
@@ -145,9 +147,13 @@ class _MessagesScreenState extends State<MessagesScreen> {
                             ],
                           ),
                         ),
-                        const StatusChip(
-                          label: 'Demo',
-                          color: AppColors.info,
+                        StatusChip(
+                          label: sms.mode == SendingMode.androidDevice
+                              ? 'Real SMS'
+                              : 'Simulated',
+                          color: sms.mode == SendingMode.androidDevice
+                              ? AppColors.success
+                              : AppColors.info,
                           dense: true,
                         ),
                       ],

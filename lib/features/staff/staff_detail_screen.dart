@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/navigation/nav.dart';
 import '../../core/theme/app_colors.dart';
@@ -29,18 +30,22 @@ class StaffDetailScreen extends StatelessWidget {
       ],
       selected: member.assignedClassIds.toSet(),
     );
-    if (picked == null) return;
-    app.staff.update(
-      member,
-      name: member.name,
-      email: member.email,
-      phone: member.phone,
-      designation: member.designation,
-      classIds: app.academic.classes
-          .where((c) => picked.contains(c.id))
-          .map((c) => c.id)
-          .toList(),
-      isActive: member.isActive,
+    if (picked == null || !context.mounted) return;
+    await runAction(
+      context,
+      () => app.updateStaff(
+        member,
+        name: member.name,
+        email: member.email,
+        phone: member.phone,
+        designation: member.designation,
+        classIds: app.academic.classes
+            .where((c) => picked.contains(c.id))
+            .map((c) => c.id)
+            .toList(),
+        isActive: member.isActive,
+      ),
+      success: 'Assigned classes updated',
     );
   }
 
@@ -129,7 +134,10 @@ class StaffDetailScreen extends StatelessWidget {
             label: 'Account',
             value: member.accountStatus.label,
           ),
-          if (pending) ...[
+          if (pending && app.isRemote) ...[
+            const SizedBox(height: 12),
+            _InviteCodeCard(member: member),
+          ] else if (pending) ...[
             const SizedBox(height: 8),
             DemoNotice(
               icon: Icons.mark_email_unread_outlined,
@@ -142,7 +150,31 @@ class StaffDetailScreen extends StatelessWidget {
             SecondaryButton(
               label: 'Mark invitation accepted (demo)',
               icon: Icons.how_to_reg_outlined,
-              onPressed: () => app.staff.markInvitationAccepted(member),
+              onPressed: () => app.resetInvite(member),
+            ),
+          ] else if (app.isRemote) ...[
+            const SizedBox(height: 8),
+            SecondaryButton(
+              label: 'Reset password (new invite code)',
+              icon: Icons.key_rounded,
+              onPressed: () async {
+                final ok = await ConfirmationDialog.show(
+                  context,
+                  title: "Reset ${member.firstName}'s password?",
+                  message:
+                      'Their current password stops working. A new invite code is created so they can set a new password.',
+                  confirmLabel: 'Reset',
+                  destructive: true,
+                  icon: Icons.key_rounded,
+                );
+                if (ok && context.mounted) {
+                  await runAction(
+                    context,
+                    () => app.resetInvite(member),
+                    success: 'New invite code created',
+                  );
+                }
+              },
             ),
           ],
           SectionHeader(
@@ -167,7 +199,9 @@ class StaffDetailScreen extends StatelessWidget {
             padding: EdgeInsets.only(top: Gap.lg, bottom: 4),
           ),
           Text(
-            'Changes apply immediately in the demo.',
+            app.isRemote
+                ? 'Changes apply on their very next action.'
+                : 'Changes apply immediately in the demo.',
             style: AppTextStyles.caption.copyWith(fontSize: 12),
           ),
           const SizedBox(height: 4),
@@ -175,9 +209,15 @@ class StaffDetailScreen extends StatelessWidget {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: member.permissions.contains(p),
-              onChanged: (v) {
-                app.setStaffPermission(member, p, v);
-                if (p == StaffPermission.sendSms && !v) {
+              onChanged: (v) async {
+                final ok = await runAction(
+                  context,
+                  () => app.setStaffPermission(member, p, v),
+                );
+                if (ok &&
+                    context.mounted &&
+                    p == StaffPermission.sendSms &&
+                    !v) {
                   AppToast.show(
                     context,
                     '${member.firstName} will no longer see Send Messages actions',
@@ -219,14 +259,17 @@ class StaffDetailScreen extends StatelessWidget {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: member.isActive,
-            onChanged: (v) => app.staff.update(
-              member,
-              name: member.name,
-              email: member.email,
-              phone: member.phone,
-              designation: member.designation,
-              classIds: member.assignedClassIds,
-              isActive: v,
+            onChanged: (v) => runAction(
+              context,
+              () => app.updateStaff(
+                member,
+                name: member.name,
+                email: member.email,
+                phone: member.phone,
+                designation: member.designation,
+                classIds: member.assignedClassIds,
+                isActive: v,
+              ),
             ),
             title: Text('Account active', style: AppTextStyles.titleSmall),
             subtitle: Text(
@@ -235,12 +278,82 @@ class StaffDetailScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: Gap.md),
-          if (member.isActive)
+          if (member.isActive && !app.isRemote)
             PrimaryButton(
               label: 'Preview as ${member.firstName}',
               icon: Icons.visibility_outlined,
               onPressed: () => _preview(context, member),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shows the invite code the admin shares with a new staff member.
+class _InviteCodeCard extends StatelessWidget {
+  const _InviteCodeCard({required this.member});
+
+  final StaffMember member;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.app;
+    final code = member.inviteCode ?? '-';
+    return CreamCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'INVITE CODE',
+            style: AppTextStyles.label.copyWith(
+              color: AppColors.textOnCreamMuted,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  code,
+                  style: AppTextStyles.display.copyWith(
+                    color: AppColors.textOnCream,
+                    fontSize: 32,
+                    letterSpacing: 4,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Copy code',
+                icon: const Icon(
+                  Icons.copy_rounded,
+                  color: AppColors.textOnCream,
+                ),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: code));
+                  AppToast.show(context, 'Invite code copied');
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Share this code with ${member.firstName}. On their phone: open TutorDesk, choose '
+            '"I have an invite code", then enter ${Fmt.phone(member.phone)}, this code and a new password.',
+            style: AppTextStyles.caption.copyWith(
+              color: AppColors.textOnCreamMuted,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SecondaryButton(
+            label: 'Create a new code',
+            icon: Icons.refresh_rounded,
+            onPressed: () => runAction(
+              context,
+              () => app.resetInvite(member),
+              success: 'New invite code created',
+            ),
+          ),
         ],
       ),
     );

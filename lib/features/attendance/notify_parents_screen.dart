@@ -5,6 +5,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../data/message_templates.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
@@ -49,17 +50,27 @@ class _NotifyParentsScreenState extends State<NotifyParentsScreen> {
       context,
       title: 'Send to ${Fmt.plural(count, 'parent')}?',
       message:
-          'Messages are queued on the sending device. This is a demo — no SMS is actually sent.',
+          'Messages are queued for sending. ${context.appRead.smsDeliveryNote}',
       confirmLabel: 'Send messages',
       icon: Icons.send_rounded,
     );
     if (!ok || !mounted) return;
     setState(() => _sending = true);
-    final result = app.notifyAttendance(
-      session,
-      _audience.statuses,
-      excludeStudentIds: _excluded,
-    );
+    final BatchResult result;
+    try {
+      result = await app.notifyAttendance(
+        session,
+        _audience.statuses,
+        excludeStudentIds: _excluded,
+      );
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _sending = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
+    }
+    if (!mounted) return;
     if (!result.created) {
       AppToast.show(
         context,

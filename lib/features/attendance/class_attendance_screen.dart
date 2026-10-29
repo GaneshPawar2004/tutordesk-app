@@ -7,6 +7,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import 'attendance_summary_screen.dart';
@@ -48,14 +49,14 @@ class _ClassAttendanceScreenState extends State<ClassAttendanceScreen> {
     final app = context.appRead;
     if (widget.isCorrection) {
       _marks.addAll(app.attendance.byId(widget.correctSessionId!)!.records);
-    } else if (app.todaySession(widget.classId) != null) {
+    } else if (app.todaySessionFor(widget.classId) != null) {
       // Already marked (possibly by someone else): show the locked summary.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         replacePage(
           context,
           AttendanceSummaryScreen(
-            sessionId: app.todaySession(widget.classId)!.id,
+            sessionId: app.todaySessionFor(widget.classId)!.id,
           ),
         );
       });
@@ -123,11 +124,22 @@ class _ClassAttendanceScreenState extends State<ClassAttendanceScreen> {
         confirmLabel: 'Save correction',
       );
       if (note == null || !mounted) return;
-      app.correctAttendance(
-        app.attendance.byId(widget.correctSessionId!)!,
-        Map.of(_marks),
-        note,
-      );
+      setState(() => _saving = true);
+      try {
+        await app.correctAttendance(
+          app.attendance.byId(widget.correctSessionId!)!,
+          Map.of(_marks),
+          note,
+        );
+      } on ApiException catch (e) {
+        if (mounted) {
+          setState(() => _saving = false);
+          AppToast.show(context, e.message, type: ToastType.error);
+        }
+        return;
+      }
+      if (!mounted) return;
+      _submitted = true;
       Navigator.of(context).pop();
       AppToast.show(context, 'Correction saved with audit note');
       return;
@@ -162,10 +174,19 @@ class _ClassAttendanceScreenState extends State<ClassAttendanceScreen> {
     if (!confirmed || !mounted) return;
 
     setState(() => _saving = true);
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
     _submitted = true;
-    final result = app.saveAttendance(widget.classId, Map.of(_marks));
+    final AttendanceSaveResult result;
+    try {
+      result = await app.saveAttendance(widget.classId, Map.of(_marks));
+    } on ApiException catch (e) {
+      _submitted = false;
+      if (mounted) {
+        setState(() => _saving = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
+    }
+    if (!mounted) return;
     if (!result.created) {
       setState(() => _saving = false);
       await ConfirmationDialog.show(
@@ -224,7 +245,7 @@ class _ClassAttendanceScreenState extends State<ClassAttendanceScreen> {
               )
               .toList();
     final conflict = !widget.isCorrection && !_submitted
-        ? app.todaySession(widget.classId)
+        ? app.todaySessionFor(widget.classId)
         : null;
     int count(AttendanceStatus s) => _marks.values.where((v) => v == s).length;
     final unmarked = roster.length - _marks.length;
@@ -252,7 +273,7 @@ class _ClassAttendanceScreenState extends State<ClassAttendanceScreen> {
         subtitle: '${Fmt.weekdayDate(app.today)} · ${cls.sessionLabel}',
         onBack: _leave,
         actions: [
-          if (!widget.isCorrection && conflict == null)
+          if (!app.isRemote && !widget.isCorrection && conflict == null)
             PopupMenuButton<String>(
               tooltip: 'More',
               icon: const Icon(Icons.more_vert_rounded),

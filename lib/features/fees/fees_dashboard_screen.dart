@@ -6,6 +6,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import '../messaging/batch_detail_screen.dart';
@@ -46,12 +47,19 @@ class _FeesDashboardScreenState extends State<FeesDashboardScreen> {
       title: 'Send fee reminders?',
       message:
           'A reminder with each student\'s overdue amount will be queued for '
-          '${Fmt.plural(rows.length, 'parent')}. This is a demo — no SMS is actually sent.',
+          '${Fmt.plural(rows.length, 'parent')}. ${context.appRead.smsDeliveryNote}',
       confirmLabel: 'Queue ${rows.length} messages',
       icon: Icons.sms_outlined,
     );
     if (!ok || !mounted) return;
-    final result = app.sendFeeReminders();
+    final BatchResult result;
+    try {
+      result = await app.sendFeeReminders();
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return;
+    }
+    if (!mounted) return;
     pushPage(context, BatchDetailScreen(batchId: result.batch.id));
   }
 

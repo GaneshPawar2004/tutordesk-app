@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/remote/api_client.dart';
 import 'cards.dart';
 
 /// Consistent confirmation dialogs. Every outward or irreversible action in the
@@ -217,4 +218,23 @@ abstract final class AppToast {
         ),
       );
   }
+}
+
+/// Runs a server action; on failure shows the server's message as a toast.
+/// Returns true on success.
+Future<bool> runAction(
+  BuildContext context,
+  Future<void> Function() action, {
+  String? success,
+}) async {
+  try {
+    await action();
+  } on ApiException catch (e) {
+    if (context.mounted) {
+      AppToast.show(context, e.message, type: ToastType.error);
+    }
+    return false;
+  }
+  if (success != null && context.mounted) AppToast.show(context, success);
+  return true;
 }

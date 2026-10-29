@@ -88,6 +88,7 @@ class MessageBatch {
 enum SendingMode {
   androidDevice('Phone SIM via Android device'),
   gateway('SMS gateway'),
+  simulated('Simulated (no real SMS)'),
   notConfigured('Not configured');
 
   const SendingMode(this.label);

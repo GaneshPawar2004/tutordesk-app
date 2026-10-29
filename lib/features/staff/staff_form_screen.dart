@@ -26,6 +26,7 @@ class _StaffFormScreenState extends State<StaffFormScreen> {
   final _designation = TextEditingController();
   var _classIds = <String>{};
   var _active = true;
+  var _saving = false;
 
   @override
   void initState() {
@@ -64,17 +65,37 @@ class _StaffFormScreenState extends State<StaffFormScreen> {
     if (picked != null) setState(() => _classIds = picked);
   }
 
-  void _save() {
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _save() async {
+    if (_saving || !_formKey.currentState!.validate()) return;
     final app = context.appRead;
     final classIds = app.academic.classes
         .where((c) => _classIds.contains(c.id))
         .map((c) => c.id)
         .toList();
     final m = widget.member;
+    setState(() => _saving = true);
     if (m != null) {
-      app.staff.update(
-        m,
+      final ok = await runAction(
+        context,
+        () => app.updateStaff(
+          m,
+          name: _name.text.trim(),
+          email: _email.text.trim(),
+          phone: _phone.text.trim(),
+          designation: _designation.text.trim(),
+          classIds: classIds,
+          isActive: _active,
+        ),
+      );
+      if (!mounted) return;
+      if (!ok) return setState(() => _saving = false);
+      Navigator.of(context).pop();
+      AppToast.show(context, 'Staff details updated');
+      return;
+    }
+    StaffMember? member;
+    final ok = await runAction(context, () async {
+      member = await app.addStaff(
         name: _name.text.trim(),
         email: _email.text.trim(),
         phone: _phone.text.trim(),
@@ -82,22 +103,15 @@ class _StaffFormScreenState extends State<StaffFormScreen> {
         classIds: classIds,
         isActive: _active,
       );
-      Navigator.of(context).pop();
-      AppToast.show(context, 'Staff details updated');
-      return;
-    }
-    final member = app.addStaff(
-      name: _name.text.trim(),
-      email: _email.text.trim(),
-      phone: _phone.text.trim(),
-      designation: _designation.text.trim(),
-      classIds: classIds,
-      isActive: _active,
-    );
-    replacePage(context, StaffDetailScreen(staffId: member.id));
+    });
+    if (!mounted) return;
+    if (!ok || member == null) return setState(() => _saving = false);
+    replacePage(context, StaffDetailScreen(staffId: member!.id));
     AppToast.show(
       context,
-      'Staff added · invitation pending (demo — no email sent)',
+      app.isRemote
+          ? 'Staff added · share the invite code shown on their page'
+          : 'Staff added · invitation pending (demo — no email sent)',
     );
   }
 

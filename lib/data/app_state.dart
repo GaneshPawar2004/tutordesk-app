@@ -1,9 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 import '../core/utils/formatters.dart';
 import '../shared/models/models.dart';
 import 'message_templates.dart';
 import 'mock_data.dart';
+import 'remote/api_client.dart';
+import 'remote/session_store.dart';
+import 'remote/sms_sender.dart';
+import 'remote/snapshot.dart';
 import 'repositories/academic_repository.dart';
 import 'repositories/attendance_repository.dart';
 import 'repositories/exam_repository.dart';
@@ -16,6 +22,7 @@ import 'repositories/student_repository.dart';
 export 'repositories/attendance_repository.dart' show AttendanceSaveResult;
 export 'repositories/messaging_repository.dart'
     show BatchResult, RecipientDraft;
+export 'remote/api_client.dart' show ApiException;
 export 'repositories/student_repository.dart' show PromotionResult;
 
 class StudentEnrollment {
@@ -117,16 +124,85 @@ class AdmissionDraft {
   final FeeDraft? fee;
 }
 
-/// Application state for the static phase: the signed-in demo role plus the
-/// mock repositories. Everything is in memory and resets on restart.
+String _d(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+/// Application state: the signed-in user plus repositories of tuition data.
 ///
-/// Role and permission checks here only shape the UI. They are not security;
-/// the future backend must enforce access control and tenant isolation.
+/// Two modes:
+/// * **Connected** ([AppState.remote]): data comes from the TutorDesk API.
+///   Every change is sent to the server, then the app re-syncs. The server is
+///   the source of truth and enforces permissions and locks.
+/// * **Offline sample data** ([AppState.new]): in-memory demo data, used by
+///   the automated widget tests.
 class AppState extends ChangeNotifier {
-  AppState({DateTime? now, MessageTransport? transport}) {
+  AppState({DateTime? now, MessageTransport? transport}) : _api = null {
     final start = now ?? DateTime.now();
     _clockOffset = start.difference(DateTime.now());
-    final seed = buildMockSeed(start);
+    _transport = transport ?? SimulatedMessageTransport();
+    _load(buildMockSeed(start));
+    _selectedYearId = academic.currentYear.id;
+  }
+
+  /// Connected to the backend. Call [restoreSession] or one of the sign-in
+  /// methods before showing the app.
+  AppState.remote({SessionStore? store})
+    : _api = ApiClient(baseUrl: SessionStore.defaultServer),
+      _store = store ?? SessionStore() {
+    _clockOffset = Duration.zero;
+    _transport = SimulatedMessageTransport();
+    _api!.onUnauthorized = signOut;
+    smsSender = SmsSender(_api, _changed);
+    _load(emptySeed());
+    _selectedYearId = academic.currentYear.id;
+  }
+
+  final ApiClient? _api;
+  SessionStore? _store;
+
+  /// Sends queued parent SMS from this phone's SIM when the admin turns it on.
+  SmsSender? smsSender;
+  bool get isRemote => _api != null;
+  String get serverUrl => _api?.baseUrl ?? '';
+
+  late Tuition tuition;
+  late AdminUser admin;
+  late AcademicRepository academic;
+  late StudentRepository students;
+  late FeeRepository fees;
+  late AttendanceRepository attendance;
+  late ExamRepository exams;
+  late StaffRepository staff;
+  late NotificationRepository notifications;
+  late MessagingRepository messaging;
+  late List<TuitionEvent> events;
+
+  /// Device-only preferences.
+  final notificationPrefs = <String, bool>{
+    'Attendance completed': true,
+    'Exam results published': true,
+    'New admissions': true,
+    'Failed messages': true,
+    'Payments recorded': true,
+    'Daily summary at 8 PM': false,
+  };
+  final appPrefs = <String, bool>{
+    'Confirm before sending messages': true,
+    'Show parent phone numbers in lists': true,
+    'Haptic feedback when marking attendance': true,
+  };
+  late final MessageTransport _transport;
+  var _disposed = false;
+  Timer? _poll;
+
+  void _changed() {
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Call after mutating a model object directly (offline mode only).
+  void touch() => _changed();
+
+  void _load(MockSeed seed) {
     tuition = seed.tuition;
     admin = seed.admin;
     academic = AcademicRepository(
@@ -153,7 +229,6 @@ class AppState extends ChangeNotifier {
       notifications: seed.notifications,
       activity: seed.activity,
     );
-    _transport = transport ?? SimulatedMessageTransport();
     messaging = MessagingRepository(
       _changed,
       batches: seed.batches,
@@ -162,57 +237,183 @@ class AppState extends ChangeNotifier {
       onBatchSettled: _onBatchSettled,
     );
     events = seed.events;
-    _selectedYearId = academic.currentYear.id;
   }
-
-  late final Tuition tuition;
-  late final AdminUser admin;
-  late final AcademicRepository academic;
-  late final StudentRepository students;
-  late final FeeRepository fees;
-  late final AttendanceRepository attendance;
-  late final ExamRepository exams;
-  late final StaffRepository staff;
-  late final NotificationRepository notifications;
-  late final MessagingRepository messaging;
-  late final List<TuitionEvent> events;
-
-  /// In-memory preferences (reset on restart).
-  final notificationPrefs = <String, bool>{
-    'Attendance completed': true,
-    'Exam results published': true,
-    'New admissions': true,
-    'Failed messages': true,
-    'Payments recorded': true,
-    'Daily summary at 8 PM': false,
-  };
-  final appPrefs = <String, bool>{
-    'Confirm before sending messages': true,
-    'Show parent phone numbers in lists': true,
-    'Haptic feedback when marking attendance': true,
-  };
-  late final MessageTransport _transport;
-  var _disposed = false;
-
-  void _changed() {
-    if (!_disposed) notifyListeners();
-  }
-
-  /// Call after mutating a model object directly (e.g. settings forms).
-  void touch() => _changed();
 
   @override
   void dispose() {
     _disposed = true;
+    _poll?.cancel();
+    smsSender?.stop();
     _transport.dispose();
     super.dispose();
   }
 
-  /// Non-zero only when a fixed start time is injected (tests, demos).
+  /// Non-zero only when a fixed start time is injected (tests).
   late final Duration _clockOffset;
 
   DateTime get now => DateTime.now().add(_clockOffset);
   DateTime get today => Fmt.dateOnly(now);
+
+  // ========================================================== connection
+
+  /// Downloads everything the signed-in user may see and rebuilds the data.
+  Future<void> refresh() async {
+    final api = _api;
+    if (api == null || api.token == null) return;
+    final json = await api.get('/sync') as Map<String, dynamic>;
+    final (seed, me) = parseSnapshot(json);
+    _load(seed);
+    _role = me.role;
+    _staffId = me.role == UserRole.staff ? me.id : null;
+    if (!academic.years.any((y) => y.id == _selectedYearId)) {
+      _selectedYearId = academic.currentYear.id;
+    }
+    _schedulePolling();
+    _syncSender();
+    _changed();
+  }
+
+  /// The sender runs only for an admin, with device mode on at the server and
+  /// this phone chosen as the sender.
+  void _syncSender() {
+    final sender = smsSender;
+    if (sender == null) return;
+    if (isAdmin &&
+        sender.enabled &&
+        messaging.sms.mode == SendingMode.androidDevice) {
+      sender.start();
+    } else {
+      sender.stop();
+    }
+  }
+
+  /// Chooses how parent SMS are sent. `useThisPhone` makes this phone the
+  /// sender (asks for SMS permission first); false switches back to simulated.
+  Future<void> setSmsMode({
+    required bool useThisPhone,
+    String deviceName = '',
+  }) async {
+    final api = _api;
+    final sender = smsSender;
+    if (api == null || sender == null) return;
+    if (useThisPhone) {
+      if (!await sender.requestPermission()) {
+        throw const ApiException(
+          0,
+          'permission',
+          'SMS permission was not allowed. Allow "SMS" for TutorDesk in Android settings.',
+        );
+      }
+      await api.put('/messages/sms-settings', {
+        'mode': 'device',
+        'deviceName': deviceName,
+      });
+      await sender.setEnabled(true, name: deviceName);
+    } else {
+      await api.put('/messages/sms-settings', {'mode': 'simulated'});
+      await sender.setEnabled(false);
+    }
+    await refresh();
+  }
+
+  /// One line for toasts after queueing messages.
+  String get smsDeliveryNote => messaging.sms.mode == SendingMode.androidDevice
+      ? 'They will be sent from the SIM of ${messaging.sms.deviceName}.'
+      : 'SMS delivery is simulated — parents do not receive real SMS.';
+
+  /// While any message is still queued or sending, re-sync every 2 seconds
+  /// so delivery statuses update live.
+  void _schedulePolling() {
+    final pending = messaging.batches.any((b) => b.pending > 0);
+    if (pending && _poll == null) {
+      _poll = Timer.periodic(const Duration(seconds: 2), (_) {
+        refresh().catchError((_) {});
+      });
+    } else if (!pending) {
+      _poll?.cancel();
+      _poll = null;
+    }
+  }
+
+  /// Restores a saved login on app start. Returns true if signed in.
+  Future<bool> restoreSession() async {
+    final api = _api;
+    if (api == null) return false;
+    final saved = await _store!.load();
+    api.baseUrl = saved.server;
+    api.token = saved.token;
+    await smsSender?.load();
+    if (saved.token == null) return false;
+    try {
+      await refresh();
+      return true;
+    } on ApiException catch (e) {
+      if (e.status == 401) {
+        api.token = null;
+        await _store!.save(server: saved.server);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _signInWith(
+    String server,
+    Future<dynamic> Function(ApiClient api) call,
+  ) async {
+    final api = _api!;
+    api.baseUrl = server.trim();
+    api.token = null;
+    final res = await call(api) as Map<String, dynamic>;
+    api.token = res['token'] as String;
+    await _store!.save(server: api.baseUrl, token: api.token);
+    await refresh();
+  }
+
+  Future<void> login({
+    required String server,
+    required String identifier,
+    required String password,
+  }) => _signInWith(
+    server,
+    (api) => api.post('/auth/login', {
+      'identifier': identifier,
+      'password': password,
+    }),
+  );
+
+  Future<void> registerTuition({
+    required String server,
+    required String tuitionName,
+    required String city,
+    required String adminName,
+    required String phone,
+    required String email,
+    required String password,
+  }) => _signInWith(
+    server,
+    (api) => api.post('/auth/register', {
+      'tuitionName': tuitionName,
+      'city': city,
+      'adminName': adminName,
+      'phone': phone,
+      if (email.isNotEmpty) 'email': email,
+      'password': password,
+    }),
+  );
+
+  Future<void> acceptInvite({
+    required String server,
+    required String phone,
+    required String code,
+    required String password,
+  }) => _signInWith(
+    server,
+    (api) => api.post('/auth/accept-invite', {
+      'phone': phone,
+      'code': code,
+      'password': password,
+    }),
+  );
 
   // =============================================================== session
 
@@ -225,8 +426,14 @@ class AppState extends ChangeNotifier {
   bool get isAdmin => _role == UserRole.admin;
   bool get isStaff => _role == UserRole.staff;
 
-  StaffMember? get currentStaff =>
-      _staffId == null ? null : staff.byId(_staffId!);
+  StaffMember? get currentStaff {
+    final id = _staffId;
+    if (id == null) return null;
+    for (final s in staff.all) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
 
   String get userName => isAdmin ? admin.name : (currentStaff?.name ?? '');
   String get userFirstName => userName.split(' ').first;
@@ -252,10 +459,21 @@ class AppState extends ChangeNotifier {
   void signOut() {
     _role = null;
     _staffId = null;
+    _poll?.cancel();
+    _poll = null;
+    smsSender?.stop();
+    final api = _api;
+    if (api != null) {
+      api.token = null;
+      _store?.save(server: api.baseUrl);
+      _load(emptySeed());
+      _selectedYearId = academic.currentYear.id;
+    }
     _changed();
   }
 
-  /// UI-level permission check. Admin can do everything.
+  /// UI-level permission check. Admin can do everything. The server
+  /// enforces the same rules independently.
   bool can(StaffPermission permission) {
     if (isAdmin) return true;
     final member = currentStaff;
@@ -271,7 +489,10 @@ class AppState extends ChangeNotifier {
   bool get canSendMessages =>
       can(StaffPermission.sendParentMessages) && can(StaffPermission.sendSms);
 
-  AcademicYear get selectedYear => academic.yearById(_selectedYearId);
+  AcademicYear get selectedYear => academic.years.firstWhere(
+    (y) => y.id == _selectedYearId,
+    orElse: () => academic.currentYear,
+  );
   AcademicYear get currentYear => academic.currentYear;
 
   void selectYear(String id) {
@@ -294,6 +515,105 @@ class AppState extends ChangeNotifier {
 
   int enrolledCount(String classId, [String? yearId]) =>
       students.studentsIn(classId, yearId ?? _selectedYearId).length;
+
+  Future<SchoolClass> addClass({
+    required String name,
+    required int grade,
+    required String sessionLabel,
+    required String room,
+    required List<String> subjectIds,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      final res =
+          await api.post('/classes', {
+                'name': name,
+                'grade': grade,
+                'sessionLabel': sessionLabel,
+                'room': room,
+                'subjectIds': subjectIds,
+              })
+              as Map<String, dynamic>;
+      await refresh();
+      return academic.classById(res['id'] as String);
+    }
+    return academic.addClass(
+      name: name,
+      grade: grade,
+      sessionLabel: sessionLabel,
+      room: room,
+      subjectIds: subjectIds,
+    );
+  }
+
+  Future<void> updateClass(
+    SchoolClass cls, {
+    required String name,
+    required int grade,
+    required String sessionLabel,
+    required String room,
+    required List<String> subjectIds,
+    required bool isActive,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/classes/${cls.id}', {
+        'name': name,
+        'grade': grade,
+        'sessionLabel': sessionLabel,
+        'room': room,
+        'subjectIds': subjectIds,
+        'isActive': isActive,
+      });
+      return refresh();
+    }
+    academic.updateClass(
+      cls,
+      name: name,
+      grade: grade,
+      sessionLabel: sessionLabel,
+      room: room,
+      subjectIds: subjectIds,
+      isActive: isActive,
+    );
+  }
+
+  Future<void> assignStaffToClass(String classId, Set<String> staffIds) async {
+    final api = _api;
+    if (api != null) {
+      await api.put('/classes/$classId/staff', {'staffIds': staffIds.toList()});
+      return refresh();
+    }
+    staff.assignToClass(classId, staffIds);
+  }
+
+  Future<void> addYear({
+    required String label,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.post('/academic-years', {
+        'label': label,
+        'startDate': _d(start),
+        'endDate': _d(end),
+      });
+      return refresh();
+    }
+    academic.addYear(label: label, start: start, end: end);
+  }
+
+  Future<void> setCurrentYear(String yearId) async {
+    final api = _api;
+    if (api != null) {
+      await api.post('/academic-years/$yearId/make-current');
+      await refresh();
+    } else {
+      academic.setCurrentYear(yearId);
+    }
+    selectYear(yearId);
+  }
 
   // ============================================================== students
 
@@ -330,7 +650,44 @@ class AppState extends ChangeNotifier {
   List<Enrollment> historyOf(String studentId) =>
       students.enrollmentsOf(studentId, academic.years);
 
-  Student addStudent(AdmissionDraft d) {
+  /// The ID shown on the admission form. The server assigns the final one.
+  String get nextStudentIdPreview =>
+      isRemote ? 'Assigned on save' : students.nextStudentId();
+
+  Future<Student> addStudent(AdmissionDraft d) async {
+    final api = _api;
+    if (api != null) {
+      final fee = d.fee;
+      final res =
+          await api.post('/students', {
+                'firstName': d.firstName,
+                'lastName': d.lastName,
+                'dateOfBirth': _d(d.dateOfBirth),
+                if (d.gender != null) 'gender': d.gender!.name,
+                'parentName': d.parentName,
+                'parentPhone': d.parentPhone,
+                if (d.altPhone != null) 'altPhone': d.altPhone,
+                if (d.address != null) 'address': d.address,
+                'yearId': d.yearId,
+                'classId': d.classId,
+                'enrolledOn': _d(d.enrolledOn),
+                'active': d.active,
+                if (fee != null && isAdmin)
+                  'fee': {
+                    'annualFee': fee.annualFee,
+                    'installmentCount': fee.installments,
+                    'frequency': fee.frequency.name,
+                    'firstDueDate': _d(fee.firstDueDate),
+                    'initialAmount': fee.initialAmount,
+                    'paymentDate': _d(fee.paymentDate),
+                    'method': fee.method.name,
+                    if (fee.note != null) 'note': fee.note,
+                  },
+              })
+              as Map<String, dynamic>;
+      await refresh();
+      return students.byId((res['student'] as Map)['id'] as String);
+    }
     final student = Student(
       id: d.studentId,
       firstName: d.firstName,
@@ -353,7 +710,6 @@ class AppState extends ChangeNotifier {
       status: d.active ? EnrollmentStatus.active : EnrollmentStatus.withdrawn,
     );
     students.add(student, enrollment);
-
     final fee = d.fee;
     if (fee != null && isAdmin) {
       fees.addPlan(
@@ -393,6 +749,26 @@ class AppState extends ChangeNotifier {
     return student;
   }
 
+  /// Saves edits made to [student]'s fields.
+  Future<void> saveStudent(Student student) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/students/${student.id}', {
+        'firstName': student.firstName,
+        'lastName': student.lastName,
+        'dateOfBirth': _d(student.dateOfBirth),
+        'gender': student.gender?.name,
+        'parentName': student.parentName,
+        'parentPhone': student.parentPhone,
+        'altPhone': student.altPhone,
+        'address': student.address,
+        'isActive': student.isActive,
+      });
+      return refresh();
+    }
+    students.update(student);
+  }
+
   // ================================================================== fees
 
   FeeSummary feeSummaryFor(String enrollmentId) =>
@@ -429,16 +805,28 @@ class AppState extends ChangeNotifier {
     return total;
   }
 
-  Payment recordPayment({
+  Future<void> recordPayment({
     required Enrollment enrollment,
     required int amount,
     required DateTime date,
     required PaymentMethod method,
     String? reference,
     String? note,
-  }) {
+  }) async {
     assert(isAdmin, 'Payments are admin-only');
-    final payment = fees.record(
+    final api = _api;
+    if (api != null) {
+      await api.post('/fees/payments', {
+        'enrollmentId': enrollment.id,
+        'amount': amount,
+        'date': _d(date),
+        'method': method.name,
+        'reference': ?reference,
+        'note': ?note,
+      });
+      return refresh();
+    }
+    fees.record(
       enrollmentId: enrollment.id,
       amount: amount,
       date: date,
@@ -457,16 +845,31 @@ class AppState extends ChangeNotifier {
         adminOnly: true,
       ),
     );
-    return payment;
   }
 
-  FeeSetupResult setFeePlan({
+  Future<FeeSetupResult> setFeePlan({
     required Enrollment enrollment,
     required int annualFee,
     required int installments,
     required FeeFrequency frequency,
     required DateTime firstDueDate,
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      try {
+        await api.post('/fees/enrollments/${enrollment.id}/plan', {
+          'annualFee': annualFee,
+          'installmentCount': installments,
+          'frequency': frequency.name,
+          'firstDueDate': _d(firstDueDate),
+        });
+      } on ApiException catch (e) {
+        if (e.isConflict) return FeeSetupResult.alreadyExists;
+        rethrow;
+      }
+      await refresh();
+      return FeeSetupResult.created;
+    }
     if (fees.planFor(enrollment.id) != null) {
       return FeeSetupResult.alreadyExists;
     }
@@ -488,11 +891,20 @@ class AppState extends ChangeNotifier {
   AttendanceSession? todaySession(String classId) =>
       attendance.sessionFor(classId, today);
 
+  /// Today's session for [classId] by matching class + date (server IDs are
+  /// not derived from the date like the offline ones).
+  AttendanceSession? _sessionOn(String classId, DateTime day) {
+    for (final s in attendance.forClass(classId)) {
+      if (Fmt.isSameDay(s.date, day)) return s;
+    }
+    return null;
+  }
+
   TodayAttendance todayAttendance({List<SchoolClass>? classes}) {
     final list = classes ?? visibleClasses;
     var marked = 0, present = 0, absent = 0, other = 0, notMarked = 0;
     for (final c in list) {
-      final session = todaySession(c.id);
+      final session = todaySessionFor(c.id);
       if (session == null) {
         notMarked += rosterFor(c.id).length;
         continue;
@@ -512,10 +924,41 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  AttendanceSaveResult saveAttendance(
+  /// Works in both modes (offline IDs encode the date; server IDs do not).
+  AttendanceSession? todaySessionFor(String classId) =>
+      isRemote ? _sessionOn(classId, today) : todaySession(classId);
+
+  /// Saves today's attendance. If someone already saved this class today, the
+  /// existing (locked) session is returned with `created: false`.
+  Future<AttendanceSaveResult> saveAttendance(
     String classId,
     Map<String, AttendanceStatus> records,
-  ) {
+  ) async {
+    final api = _api;
+    if (api != null) {
+      String? sessionId;
+      var created = true;
+      try {
+        final res =
+            await api.post('/attendance/sessions', {
+                  'classId': classId,
+                  'records': {
+                    for (final e in records.entries) e.key: e.value.name,
+                  },
+                })
+                as Map<String, dynamic>;
+        sessionId = res['id'] as String;
+      } on ApiException catch (e) {
+        if (!e.isConflict) rethrow;
+        created = false;
+        sessionId = ((e.details as Map?)?['session'] as Map?)?['id'] as String?;
+      }
+      await refresh();
+      final session =
+          (sessionId == null ? null : attendance.byId(sessionId)) ??
+          todaySessionFor(classId)!;
+      return AttendanceSaveResult(session, created: created);
+    }
     final result = attendance.save(
       classId: classId,
       yearId: currentYear.id,
@@ -531,8 +974,7 @@ class AppState extends ChangeNotifier {
             type: ActivityType.attendance,
             title: 'Attendance marked for $className',
             subtitle:
-                '$userName · ${result.session.presentCount + result.session.lateCount}'
-                ' of ${result.session.total} present',
+                '$userName · ${result.session.presentCount + result.session.lateCount} of ${result.session.total} present',
             at: now,
           ),
         )
@@ -545,11 +987,19 @@ class AppState extends ChangeNotifier {
     return result;
   }
 
-  void correctAttendance(
+  Future<void> correctAttendance(
     AttendanceSession session,
     Map<String, AttendanceStatus> records,
     String note,
-  ) {
+  ) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/attendance/sessions/${session.id}', {
+        'note': note,
+        'records': {for (final e in records.entries) e.key: e.value.name},
+      });
+      return refresh();
+    }
     attendance.correct(session, records: records, by: userName, note: note);
   }
 
@@ -598,7 +1048,12 @@ class AppState extends ChangeNotifier {
         results.length;
   }
 
-  Exam createExam({
+  List<Map<String, Object>> _subjectsJson(List<ExamSubject> subjects) => [
+    for (final s in subjects)
+      {'subjectId': s.subjectId, 'maxMarks': s.maxMarks},
+  ];
+
+  Future<Exam> createExam({
     required String name,
     required String classId,
     required DateTime date,
@@ -606,7 +1061,23 @@ class AppState extends ChangeNotifier {
     required String description,
     required bool isDraft,
     String? yearId,
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      final res =
+          await api.post('/exams', {
+                'name': name,
+                'classId': classId,
+                'date': _d(date),
+                'subjects': _subjectsJson(subjects),
+                'description': description,
+                'isDraft': isDraft,
+                'academicYearId': yearId ?? currentYear.id,
+              })
+              as Map<String, dynamic>;
+      await refresh();
+      return exams.byId(res['id'] as String);
+    }
     final exam = exams.create(
       name: name,
       academicYearId: yearId ?? currentYear.id,
@@ -628,12 +1099,59 @@ class AppState extends ChangeNotifier {
     return exam;
   }
 
-  void saveMarks(
+  Future<void> updateExam(
+    Exam exam, {
+    required String name,
+    required String classId,
+    required DateTime date,
+    required List<ExamSubject> subjects,
+    required String description,
+    required bool isDraft,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/exams/${exam.id}', {
+        'name': name,
+        'classId': classId,
+        'date': _d(date),
+        'subjects': _subjectsJson(subjects),
+        'description': description,
+        'isDraft': isDraft,
+      });
+      return refresh();
+    }
+    exams.update(
+      exam,
+      name: name,
+      classId: classId,
+      date: date,
+      subjects: subjects,
+      description: description,
+      isDraft: isDraft,
+    );
+  }
+
+  /// Saves one subject's marks. Pass `resync: false` when saving several
+  /// subjects in a row, then call [refresh] once.
+  Future<void> saveMarks(
     Exam exam,
     String subjectId,
     Map<String, MarkEntry> entries, {
     String? correctionNote,
-  }) {
+    bool resync = true,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.put('/exams/${exam.id}/marks/$subjectId', {
+        'entries': {
+          for (final e in entries.entries)
+            e.key: e.value.absent ? {'absent': true} : {'marks': e.value.marks},
+        },
+        'correctionNote': ?correctionNote,
+      });
+      if (resync) await refresh();
+      return;
+    }
     exams.saveMarks(exam, subjectId, entries);
     if (correctionNote != null) {
       exams.logCorrection(
@@ -643,7 +1161,12 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void publishResults(Exam exam) {
+  Future<void> publishResults(Exam exam) async {
+    final api = _api;
+    if (api != null) {
+      await api.post('/exams/${exam.id}/publish');
+      return refresh();
+    }
     exams.publish(exam);
     final className = academic.classById(exam.classId).name;
     notifications
@@ -672,8 +1195,24 @@ class AppState extends ChangeNotifier {
 
   String resultsSourceKey(Exam exam) => 'exam:${exam.id}:r${exam.revision}';
 
-  BatchResult sendResults(Exam exam, List<Student> recipients) {
+  /// Turns a batch response from the server into a [BatchResult].
+  Future<BatchResult> _remoteBatch(Future<dynamic> request) async {
+    final res = await request as Map<String, dynamic>;
+    await refresh();
+    final id = (res['batch'] as Map)['id'] as String;
+    return BatchResult(messaging.byId(id)!, created: res['created'] == true);
+  }
+
+  Future<BatchResult> sendResults(Exam exam, List<Student> recipients) async {
     assert(canSendMessages);
+    final api = _api;
+    if (api != null) {
+      return _remoteBatch(
+        api.post('/messages/exam-results/${exam.id}', {
+          'studentIds': [for (final s in recipients) s.id],
+        }),
+      );
+    }
     final className = academic.classById(exam.classId).name;
     final drafts = [
       for (final s in recipients)
@@ -720,12 +1259,21 @@ class AppState extends ChangeNotifier {
 
   String attendanceSourceKey(AttendanceSession s) => 'attendance:${s.id}';
 
-  BatchResult notifyAttendance(
+  Future<BatchResult> notifyAttendance(
     AttendanceSession session,
     Set<AttendanceStatus> include, {
     Set<String> excludeStudentIds = const {},
-  }) {
+  }) async {
     assert(canSendMessages);
+    final api = _api;
+    if (api != null) {
+      return _remoteBatch(
+        api.post('/messages/attendance/${session.id}', {
+          'statuses': [for (final s in include) s.name],
+          'excludeStudentIds': excludeStudentIds.toList(),
+        }),
+      );
+    }
     final drafts = <RecipientDraft>[];
     session.records.forEach((studentId, status) {
       if (!include.contains(status) || excludeStudentIds.contains(studentId)) {
@@ -764,14 +1312,26 @@ class AppState extends ChangeNotifier {
 
   /// [draftKey] is generated once per composer, so double taps cannot create
   /// a second batch.
-  BatchResult sendAnnouncement({
+  Future<BatchResult> sendAnnouncement({
     required String draftKey,
     required String title,
     required String body,
     required List<String> classIds,
     List<Student>? selected,
-  }) {
+  }) async {
     assert(canSendMessages);
+    final api = _api;
+    if (api != null) {
+      return _remoteBatch(
+        api.post('/messages/announcements', {
+          'draftKey': draftKey,
+          'title': title,
+          'body': body,
+          'classIds': classIds,
+          if (selected != null) 'studentIds': [for (final s in selected) s.id],
+        }),
+      );
+    }
     final list =
         selected ??
         [for (final c in classIds) ...students.studentsIn(c, currentYear.id)];
@@ -796,15 +1356,16 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  String get feeReminderKey =>
-      'fees:reminder:${today.year}-${today.month}-${today.day}';
+  String get feeReminderKey => 'fees:reminder:${_d(today)}';
 
   List<FeeRow> get overdueRows => feeDirectory(
     yearId: currentYear.id,
   ).where((r) => r.summary.overdue > 0 && r.student.isActive).toList();
 
-  BatchResult sendFeeReminders() {
+  Future<BatchResult> sendFeeReminders() async {
     assert(isAdmin);
+    final api = _api;
+    if (api != null) return _remoteBatch(api.post('/messages/fee-reminders'));
     final rows = overdueRows;
     return messaging.createBatch(
       sourceKey: feeReminderKey,
@@ -834,6 +1395,24 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  /// Retries failed (and stuck pending) recipients only. Returns the count.
+  Future<int> retryBatch(MessageBatch batch) async {
+    final api = _api;
+    if (api != null) {
+      final res =
+          await api.post('/messages/batches/${batch.id}/retry')
+              as Map<String, dynamic>;
+      await refresh();
+      return ((res['retried'] as num?) ?? 0).toInt() +
+          ((res['pending'] as num?) ?? 0).toInt();
+    }
+    return messaging.retryFailed(batch) + messaging.processPending(batch);
+  }
+
+  /// In connected mode stuck messages are handled by [retryBatch].
+  bool hasStuckPending(MessageBatch batch) =>
+      !isRemote && messaging.hasStuckPending(batch);
+
   ({int sentToday, int failed, int pending}) get messageStats {
     var sent = 0, failed = 0, pending = 0;
     for (final b in visibleBatches) {
@@ -856,22 +1435,61 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  // ========================================================= notifications
+
+  Future<void> markNotificationRead(AppNotification n) async {
+    if (n.isRead) return;
+    notifications.markRead(n);
+    await _api?.post('/notifications/${n.id}/read');
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    notifications.markAllRead(isAdmin: isAdmin);
+    await _api?.post('/notifications/read-all');
+  }
+
   // ================================================================= staff
 
-  void setStaffPermission(
+  Future<void> setStaffPermission(
     StaffMember member,
     StaffPermission p,
     bool granted,
-  ) => staff.setPermission(member, p, granted);
+  ) async {
+    final api = _api;
+    if (api != null) {
+      final next = {...member.permissions};
+      granted ? next.add(p) : next.remove(p);
+      await api.put('/staff/${member.id}/permissions', {
+        'permissions': [for (final x in next) x.name],
+      });
+      return refresh();
+    }
+    staff.setPermission(member, p, granted);
+  }
 
-  StaffMember addStaff({
+  Future<StaffMember> addStaff({
     required String name,
     required String email,
     required String phone,
     required String designation,
     required List<String> classIds,
     required bool isActive,
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      final res =
+          await api.post('/staff', {
+                'name': name,
+                if (email.isNotEmpty) 'email': email,
+                'phone': phone,
+                'designation': designation,
+                'assignedClassIds': classIds,
+                'isActive': isActive,
+              })
+              as Map<String, dynamic>;
+      await refresh();
+      return staff.byId(res['id'] as String);
+    }
     final member = staff.add(
       name: name,
       email: email,
@@ -892,17 +1510,139 @@ class AppState extends ChangeNotifier {
     return member;
   }
 
+  Future<void> updateStaff(
+    StaffMember member, {
+    required String name,
+    required String email,
+    required String phone,
+    required String designation,
+    required List<String> classIds,
+    required bool isActive,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/staff/${member.id}', {
+        'name': name,
+        'email': email,
+        'phone': phone,
+        'designation': designation,
+        'assignedClassIds': classIds,
+        'isActive': isActive,
+      });
+      return refresh();
+    }
+    staff.update(
+      member,
+      name: name,
+      email: email,
+      phone: phone,
+      designation: designation,
+      classIds: classIds,
+      isActive: isActive,
+    );
+  }
+
+  /// Connected: issues a fresh invite code. Offline: marks the invite accepted.
+  Future<void> resetInvite(StaffMember member) async {
+    final api = _api;
+    if (api != null) {
+      await api.post('/staff/${member.id}/reset-invite');
+      return refresh();
+    }
+    staff.markInvitationAccepted(member);
+  }
+
+  // ============================================================ settings
+
+  Future<void> updateTuition({
+    required String name,
+    required String city,
+    required String address,
+    required String phone,
+    required String email,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/tuition', {
+        'name': name,
+        'city': city,
+        'address': address,
+        'phone': phone,
+        'email': email,
+      });
+      return refresh();
+    }
+    tuition
+      ..name = name
+      ..city = city
+      ..address = address
+      ..phone = phone
+      ..email = email;
+    _changed();
+  }
+
+  Future<void> updateProfile({
+    required String name,
+    required String email,
+    required String phone,
+  }) async {
+    final api = _api;
+    if (api != null) {
+      await api.patch('/me', {'name': name, 'email': email, 'phone': phone});
+      return refresh();
+    }
+    if (isAdmin) {
+      admin
+        ..name = name
+        ..email = email
+        ..phone = phone;
+      _changed();
+    } else {
+      final m = currentStaff!;
+      staff.update(
+        m,
+        name: name,
+        email: email,
+        phone: phone,
+        designation: m.designation,
+        classIds: m.assignedClassIds,
+        isActive: m.isActive,
+      );
+    }
+  }
+
   // ============================================================ promotion
 
-  PromotionResult promote({
+  Future<PromotionResult> promote({
     required AcademicYear from,
     required AcademicYear to,
     required SchoolClass toClass,
     required List<String> studentIds,
     int? annualFee,
     int installments = 1,
-  }) {
+  }) async {
     assert(isAdmin);
+    final api = _api;
+    if (api != null) {
+      final res =
+          await api.post('/promotions', {
+                'fromYearId': from.id,
+                'toYearId': to.id,
+                'toClassId': toClass.id,
+                'studentIds': studentIds,
+                if (annualFee != null && annualFee > 0) 'annualFee': annualFee,
+                'installments': installments,
+              })
+              as Map<String, dynamic>;
+      await refresh();
+      final promotedIds = [
+        for (final e in (res['promoted'] as List)) (e as Map)['id'] as String,
+      ];
+      return PromotionResult(
+        promoted: [for (final id in promotedIds) ?students.enrollmentById(id)],
+        skipped: [for (final s in (res['skipped'] as List)) s as String],
+      );
+    }
     final result = students.promote(
       fromYearId: from.id,
       toYearId: to.id,

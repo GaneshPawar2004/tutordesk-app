@@ -5,6 +5,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import 'message_widgets.dart';
@@ -33,7 +34,14 @@ class _BatchDetailScreenState extends State<BatchDetailScreen> {
       icon: Icons.refresh_rounded,
     );
     if (!ok || !mounted) return;
-    final count = app.messaging.retryFailed(batch);
+    final int count;
+    try {
+      count = await app.retryBatch(batch);
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return;
+    }
+    if (!mounted) return;
     AppToast.show(
       context,
       'Retrying ${Fmt.plural(count, 'message')}',
@@ -41,8 +49,15 @@ class _BatchDetailScreenState extends State<BatchDetailScreen> {
     );
   }
 
-  void _processPending(MessageBatch batch) {
-    final count = context.appRead.messaging.processPending(batch);
+  Future<void> _processPending(MessageBatch batch) async {
+    final int count;
+    try {
+      count = await context.appRead.retryBatch(batch);
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return;
+    }
+    if (!mounted) return;
     AppToast.show(
       context,
       'Sending ${Fmt.plural(count, 'pending message')}',
@@ -79,7 +94,7 @@ class _BatchDetailScreenState extends State<BatchDetailScreen> {
         : batch.classIds
               .map((id) => app.academic.classById(id).name)
               .join(', ');
-    final stuck = app.messaging.hasStuckPending(batch);
+    final stuck = app.hasStuckPending(batch);
     final canSend = app.canSendMessages;
 
     return AppScaffold(

@@ -1,65 +1,52 @@
-# TutorDesk App — Remaining Work
+# TutorDesk App — Status & Remaining Work
 
-Flutter Android app for tuition owners (admin) and staff. Part of three repos:
+Flutter Android app for tuition admins and staff. Part of three repos:
 `tutordesk-app` (this), `tutordesk-web` (React), `tutordesk-backend` (Node API).
-
-## Current state
-
-- **Phase 1 is complete: static, interactive UI.** All screens run on local mock data
-  (`lib/data/mock_data.dart`) held in memory (`lib/data/app_state.dart`). Data resets on restart.
-- Admin and staff previews, role-aware navigation, students, admission, profile, academic
-  years and promotion, classes, attendance with locking, parent notifications (simulated),
-  fees and payments, staff permissions, exams, marks, results, messages, reports,
-  notifications and settings.
-- `flutter analyze`: no issues. `flutter test`: 62 tests passing (rules plus every screen
-  rendered at 360×640 for admin and staff).
-- A debug APK was built but **not yet installed or tested on a real phone**.
-
-See `README.md` for how to run it and a demo walkthrough.
 
 ## Setup
 
 ```bash
 flutter pub get
-flutter run          # Android device or emulator
-flutter test
-flutter analyze
+flutter run            # Android device/emulator
+flutter build apk --debug
 ```
 
-Needs Flutter 3.44+ / Dart 3.12. No third-party packages so far.
+The backend must be running (see tutordesk-backend). On first launch the sign-in
+screen has a **Server address** field (default `http://192.168.0.117:4000` — the PC's
+Wi‑Fi address); the phone must be on the same Wi‑Fi. If the phone cannot reach the PC,
+run `adb reverse tcp:4000 tcp:4000` and use `http://127.0.0.1:4000`.
 
-## Remaining work (suggested order)
+## What works
 
-1. **Test on real devices.** Install on at least one Android phone, check layouts, the
-   keyboard over forms, back navigation and performance with the 128-student seed.
-2. **Connect to the backend** (`tutordesk-backend`).
-   - Add an HTTP client and replace each `lib/data/repositories/*` mock with an API-backed
-     repository. Screens already go through `AppState`, so they should need few changes.
-   - Map API errors (401/403/409/400) to UI states. For example, a 409 on attendance save
-     should go to the locked session.
-   - Add loading and error states where calls are now async (most screens currently assume
-     instant data).
-   - Configure the API base URL per environment.
-3. **Real authentication.** Replace the role picker with a real login (phone OTP or
-   password), store the token securely, add logout and session-expiry handling. Keep the
-   demo selector behind a dev flag only.
-4. **SMS sending.** Replace `SimulatedMessageTransport` with the real transport chosen by
-   the backend (Android SIM sender app or gateway). Handle delivery reports. Never claim
-   delivery without a report.
-5. **Offline behaviour.** At minimum, queue attendance saves when offline and retry. The
-   backend must stay the source of truth for locks.
-6. **Features shown as "not in demo":** student photo upload, report card PDF / share,
-   report export, calling or messaging parents from the profile.
-7. **Push notifications** (Firebase Cloud Messaging) for attendance, results and failed messages.
-8. **Branding and release:** final app name and icon (currently "TutorDesk"), splash
-   screen, the Inter font (currently the system font), release signing, Play Store listing.
-9. **Localisation:** Marathi and Hindi UI and message templates.
-10. **iOS:** not configured. Only the Android platform was generated.
+- **Connected to the real backend.** Register a tuition, log in with phone/email +
+  password, or join as staff with an invite code. The login is remembered on the phone.
+- On sign-in the app downloads everything the user may see (`GET /api/sync`); every
+  change is sent to the server and the app re-syncs. Message statuses refresh every
+  2 seconds while sending.
+- All screens from Phase 1 now save to the server: classes, academic years, admission,
+  student edit, attendance (+ admin correction), notify parents, fees & payments, exams,
+  marks, publish, send results, announcements, fee reminders, staff & permissions
+  (invite code shown to the admin), promotion, notifications, tuition/profile settings.
+- First-run "Get started" checklist for a new, empty tuition.
+- Offline sample-data mode is kept only for the automated widget tests
+  (`AppState()`); the real app uses `AppState.remote()`.
 
-## Notes and caveats
+## Not verified yet
 
-- Role checks, attendance locks and duplicate-message protection in this app are UI-only.
-  Real enforcement lives in the backend.
-- Seed data is fictional (Bright Future Classes, Nashik). Ganesh Pawar `STU-0001` is used
-  as the reference student in tests (126/150 = 84%).
-- In tests, Flutter's font renders glyphs extra wide, so a passing overflow test is strict.
+The connected version compiles (`flutter analyze`: no issues) and was installed on the
+POCO, but has **not been tested end to end yet**. The widget/unit tests were updated to
+compile but were not re-run.
+
+## Remaining work
+
+1. **End-to-end testing** on a real phone, then re-run `flutter test` and fix anything found.
+2. SIM sender (Messages → SMS settings → "Send from this phone", `lib/data/remote/sms_sender.dart`
+   + `MainActivity.kt`) only runs while the app is open; a foreground service for background
+   sending is not built. Play Store restricts SEND_SMS apps.
+3. Offline behaviour (queue attendance when there is no network).
+4. Forgot/change password screens; logout of other devices.
+5. Photo upload, report-card PDF/share, report export (shown as "not available").
+6. Push notifications (FCM).
+7. Release: app icon, splash, Inter font, release signing, Play Store listing; HTTPS
+   server address once the backend is deployed (then remove `usesCleartextTraffic`).
+8. Marathi/Hindi localisation. iOS is not configured.

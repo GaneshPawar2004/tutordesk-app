@@ -8,16 +8,27 @@ import '../../data/app_scope.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 
-/// Makes it explicit that nothing leaves the device in this phase.
+/// Says whether messages really reach parents: real SIM sending or simulated.
 class SmsDemoBanner extends StatelessWidget {
   const SmsDemoBanner({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final app = context.app;
+    final sms = app.messaging.sms;
+    if (app.isRemote && sms.mode == SendingMode.androidDevice) {
+      return DemoNotice(
+        icon: Icons.sim_card_outlined,
+        color: AppColors.success,
+        text:
+            'Real SMS · sent from the SIM of "${sms.deviceName}" while TutorDesk is open on that phone.',
+      );
+    }
     return const DemoNotice(
       icon: Icons.science_outlined,
       text:
-          'Demo mode · Sending is simulated on this device. No SMS provider is connected and no real messages are sent.',
+          'Sending is simulated — parents do not receive real SMS. The admin can turn on '
+          'sending from a phone SIM in Messages → SMS settings.',
     );
   }
 }

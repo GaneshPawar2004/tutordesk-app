@@ -131,11 +131,12 @@ class _AttendanceOverviewScreenState extends State<AttendanceOverviewScreen> {
         ),
         const SectionHeader(title: 'Today\'s sessions'),
         if (classes.isEmpty)
-          const EmptyState(
+          EmptyState(
             icon: Icons.class_outlined,
-            title: 'No classes assigned',
-            message:
-                'Ask the admin to assign you to a class to take attendance.',
+            title: app.isAdmin ? 'No classes yet' : 'No classes assigned',
+            message: app.isAdmin
+                ? 'Create a class in More → Classes and add students to it to take attendance.'
+                : 'Ask the admin to assign you to a class to take attendance.',
           )
         else
           for (final c in classes)
@@ -194,7 +195,7 @@ class _SessionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.app;
-    final session = app.todaySession(schoolClass.id);
+    final session = app.todaySessionFor(schoolClass.id);
     final count = app.rosterFor(schoolClass.id).length;
     final marked = session != null;
 

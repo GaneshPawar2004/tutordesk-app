@@ -43,9 +43,11 @@ class AcademicYearsScreen extends StatelessWidget {
       icon: Icons.event_available_rounded,
     );
     if (ok && context.mounted) {
-      app.academic.setCurrentYear(year.id);
-      app.selectYear(year.id);
-      AppToast.show(context, '${year.label} is now the current year');
+      await runAction(
+        context,
+        () => app.setCurrentYear(year.id),
+        success: '${year.label} is now the current year',
+      );
     }
   }
 
@@ -268,14 +270,17 @@ class _NewYearSheetState extends State<_NewYearSheet> {
             const SizedBox(height: Gap.lg),
             PrimaryButton(
               label: 'Create year',
-              onPressed: () {
+              onPressed: () async {
                 if (!_formKey.currentState!.validate()) return;
-                app.academic.addYear(
-                  label: _label.text.trim(),
-                  start: _start,
-                  end: _end,
+                final ok = await runAction(
+                  context,
+                  () => app.addYear(
+                    label: _label.text.trim(),
+                    start: _start,
+                    end: _end,
+                  ),
                 );
-                Navigator.of(context).pop(true);
+                if (ok && context.mounted) Navigator.of(context).pop(true);
               },
             ),
           ],

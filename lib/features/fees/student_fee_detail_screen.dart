@@ -215,16 +215,23 @@ class _FeeSetupFormState extends State<_FeeSetupForm> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final app = context.appRead;
-    final result = app.setFeePlan(
-      enrollment: widget.enrollment,
-      annualFee: AmountField.parse(_fee.text),
-      installments: _installments,
-      frequency: _frequency,
-      firstDueDate: _firstDue,
-    );
+    final FeeSetupResult result;
+    try {
+      result = await app.setFeePlan(
+        enrollment: widget.enrollment,
+        annualFee: AmountField.parse(_fee.text),
+        installments: _installments,
+        frequency: _frequency,
+        firstDueDate: _firstDue,
+      );
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return;
+    }
+    if (!mounted) return;
     AppToast.show(
       context,
       result == FeeSetupResult.created

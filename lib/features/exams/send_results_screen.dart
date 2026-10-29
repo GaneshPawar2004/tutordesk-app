@@ -6,6 +6,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import '../messaging/batch_detail_screen.dart';
@@ -34,13 +35,23 @@ class _SendResultsScreenState extends State<SendResultsScreen> {
       title: 'Send results to ${Fmt.plural(recipients.length, 'parent')}?',
       message:
           'Each parent receives their child\'s subject marks, total and percentage. '
-          'Demo only — no SMS is actually sent.',
+          '${context.appRead.smsDeliveryNote}',
       confirmLabel: 'Confirm & send',
       icon: Icons.send_rounded,
     );
     if (!ok || !mounted) return;
     setState(() => _sending = true);
-    final result = context.appRead.sendResults(exam, recipients);
+    final BatchResult result;
+    try {
+      result = await context.appRead.sendResults(exam, recipients);
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _sending = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
+    }
+    if (!mounted) return;
     if (!result.created) {
       AppToast.show(
         context,

@@ -6,6 +6,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import '../messaging/batch_detail_screen.dart';
@@ -39,10 +40,16 @@ class ExamDetailScreen extends StatelessWidget {
       confirmLabel: 'Publish',
       icon: Icons.publish_rounded,
     );
-    if (ok && context.mounted) {
-      app.publishResults(exam);
-      AppToast.show(context, 'Results published');
+    if (!ok || !context.mounted) return;
+    try {
+      await app.publishResults(exam);
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
     }
+    if (context.mounted) AppToast.show(context, 'Results published');
   }
 
   @override

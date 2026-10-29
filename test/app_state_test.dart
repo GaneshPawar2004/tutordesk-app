@@ -53,15 +53,15 @@ void main() {
   });
 
   group('Rules', () {
-    test('attendance cannot be submitted twice for a session', () {
+    test('attendance cannot be submitted twice for a session', () async {
       final app = testState()..signInAsAdmin();
       final classId = 'cls-7';
       expect(app.todaySession(classId), isNull);
       final roster = app.rosterFor(classId);
-      final first = app.saveAttendance(classId, {
+      final first = await app.saveAttendance(classId, {
         for (final s in roster) s.id: AttendanceStatus.present,
       });
-      final second = app.saveAttendance(classId, {
+      final second = await app.saveAttendance(classId, {
         for (final s in roster) s.id: AttendanceStatus.absent,
       });
       expect(first.created, isTrue);
@@ -72,14 +72,18 @@ void main() {
 
     test(
       'attendance notification batch is created once; retry resends failures only',
-      () {
+      () async {
         final app = testState()..signInAsAdmin();
         final roster = app.rosterFor('cls-7');
-        final session = app.saveAttendance('cls-7', {
+        final session = (await app.saveAttendance('cls-7', {
           for (final s in roster) s.id: AttendanceStatus.present,
-        }).session;
-        final a = app.notifyAttendance(session, {...AttendanceStatus.values});
-        final b = app.notifyAttendance(session, {...AttendanceStatus.values});
+        })).session;
+        final a = await app.notifyAttendance(session, {
+          ...AttendanceStatus.values,
+        });
+        final b = await app.notifyAttendance(session, {
+          ...AttendanceStatus.values,
+        });
         expect(a.created, isTrue);
         expect(b.created, isFalse);
         expect(
@@ -105,56 +109,59 @@ void main() {
       },
     );
 
-    test('promotion adds an enrollment and never duplicates the student', () {
-      final app = testState()..signInAsAdmin();
-      final before = app.students.all.length;
-      final from = app.academic.yearById(kCurrentYearId);
-      final to = app.academic.yearById('ay-2027');
-      final oldPlan = app.fees.planFor(
-        app.students.enrollmentFor('STU-0001', kCurrentYearId)!.id,
-      )!;
-      final r = app.promote(
-        from: from,
-        to: to,
-        toClass: app.academic.classById('cls-6'),
-        studentIds: ['STU-0001'],
-        annualFee: 13000,
-      );
-      expect(r.promoted.length, 1);
-      expect(app.students.all.length, before);
-      final history = app.historyOf('STU-0001');
-      expect(history.map((e) => app.academic.classById(e.classId).name), [
-        'Class 4',
-        'Class 5',
-        'Class 6',
-      ]);
-      // Previous year's fee untouched; new year has its own agreement.
-      expect(app.fees.planFor(history[1].id), same(oldPlan));
-      expect(oldPlan.annualFee, 12000);
-      expect(app.fees.planFor(history[2].id)!.annualFee, 13000);
-      // Promoting again is skipped, not duplicated.
-      final again = app.promote(
-        from: from,
-        to: to,
-        toClass: app.academic.classById('cls-6'),
-        studentIds: ['STU-0001'],
-      );
-      expect(again.promoted, isEmpty);
-      expect(again.skipped, ['STU-0001']);
-    });
+    test(
+      'promotion adds an enrollment and never duplicates the student',
+      () async {
+        final app = testState()..signInAsAdmin();
+        final before = app.students.all.length;
+        final from = app.academic.yearById(kCurrentYearId);
+        final to = app.academic.yearById('ay-2027');
+        final oldPlan = app.fees.planFor(
+          app.students.enrollmentFor('STU-0001', kCurrentYearId)!.id,
+        )!;
+        final r = await app.promote(
+          from: from,
+          to: to,
+          toClass: app.academic.classById('cls-6'),
+          studentIds: ['STU-0001'],
+          annualFee: 13000,
+        );
+        expect(r.promoted.length, 1);
+        expect(app.students.all.length, before);
+        final history = app.historyOf('STU-0001');
+        expect(history.map((e) => app.academic.classById(e.classId).name), [
+          'Class 4',
+          'Class 5',
+          'Class 6',
+        ]);
+        // Previous year's fee untouched; new year has its own agreement.
+        expect(app.fees.planFor(history[1].id), same(oldPlan));
+        expect(oldPlan.annualFee, 12000);
+        expect(app.fees.planFor(history[2].id)!.annualFee, 13000);
+        // Promoting again is skipped, not duplicated.
+        final again = await app.promote(
+          from: from,
+          to: to,
+          toClass: app.academic.classById('cls-6'),
+          studentIds: ['STU-0001'],
+        );
+        expect(again.promoted, isEmpty);
+        expect(again.skipped, ['STU-0001']);
+      },
+    );
 
-    test('payments are appended, never rewritten', () {
+    test('payments are appended, never rewritten', () async {
       final app = testState()..signInAsAdmin();
       final e = app.students.enrollmentFor('STU-0001', kCurrentYearId)!;
       final before = app.fees.paymentsFor(e.id).length;
       final balance = app.feeSummaryFor(e.id).outstanding;
-      app.recordPayment(
+      await app.recordPayment(
         enrollment: e,
         amount: 500,
         date: app.today,
         method: PaymentMethod.cash,
       );
-      app.recordPayment(
+      await app.recordPayment(
         enrollment: e,
         amount: 700,
         date: app.today,

@@ -5,6 +5,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import 'fee_widgets.dart';
@@ -94,16 +95,25 @@ class _RecordPaymentScreenState extends State<RecordPaymentScreen> {
     );
     if (!ok || !mounted) return;
     setState(() => _saving = true);
-    await Future<void>.delayed(const Duration(milliseconds: 400));
+    try {
+      await app.recordPayment(
+        enrollment: enrollment,
+        amount: amount,
+        date: _date,
+        method: _method,
+        reference: _reference.text.trim().isEmpty
+            ? null
+            : _reference.text.trim(),
+        note: _note.text.trim().isEmpty ? null : _note.text.trim(),
+      );
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        AppToast.show(context, e.message, type: ToastType.error);
+      }
+      return;
+    }
     if (!mounted) return;
-    app.recordPayment(
-      enrollment: enrollment,
-      amount: amount,
-      date: _date,
-      method: _method,
-      reference: _reference.text.trim().isEmpty ? null : _reference.text.trim(),
-      note: _note.text.trim().isEmpty ? null : _note.text.trim(),
-    );
     final balance = app.feeSummaryFor(enrollment.id).outstanding;
     Navigator.of(context).pop();
     AppToast.show(

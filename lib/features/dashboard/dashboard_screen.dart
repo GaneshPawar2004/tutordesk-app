@@ -17,7 +17,9 @@ import '../exams/exams_screen.dart';
 import '../fees/fees_dashboard_screen.dart';
 import '../fees/record_payment_screen.dart';
 import '../notifications/notifications_screen.dart';
+import '../classes/classes_screen.dart';
 import '../profile/profile_screen.dart';
+import '../staff/staff_form_screen.dart';
 import '../students/student_form_screen.dart';
 import 'academic_year_sheet.dart';
 
@@ -44,6 +46,7 @@ class DashboardScreen extends StatelessWidget {
       children: [
         const _Header(),
         const _YearRow(),
+        const _GetStarted(),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Gap.page),
           child: _SummaryCard(today: today, classes: classes),
@@ -189,7 +192,7 @@ class _SummaryCard extends StatelessWidget {
       (sum, c) => sum + app.enrolledCount(c.id, year.id),
     );
     final remaining = classes
-        .where((c) => app.todaySession(c.id) == null)
+        .where((c) => app.todaySessionFor(c.id) == null)
         .map((c) => c.name)
         .toList();
     final progress = today.classesTotal == 0
@@ -426,10 +429,10 @@ class _QuickActions extends StatelessWidget {
           SelectOption(
             c.id,
             c.name,
-            subtitle: app.todaySession(c.id) == null
+            subtitle: app.todaySessionFor(c.id) == null
                 ? 'Not marked · ${c.sessionLabel}'
                 : 'Marked · ${c.sessionLabel}',
-            icon: app.todaySession(c.id) == null
+            icon: app.todaySessionFor(c.id) == null
                 ? Icons.radio_button_unchecked
                 : Icons.lock_outline_rounded,
           ),
@@ -821,6 +824,102 @@ class DateBadge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// First-run checklist for a newly registered tuition (admin only).
+class _GetStarted extends StatelessWidget {
+  const _GetStarted();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.app;
+    if (!app.isAdmin) return const SizedBox.shrink();
+    final hasClass = app.academic.runningClasses.isNotEmpty;
+    final hasStudent = app.activeStudentCount > 0;
+    final hasStaff = app.staff.all.isNotEmpty;
+    if (hasClass && hasStudent) return const SizedBox.shrink();
+
+    Widget step(
+      int n,
+      String title,
+      String subtitle,
+      bool done,
+      VoidCallback? onTap,
+    ) => ListTile(
+      contentPadding: EdgeInsets.zero,
+      onTap: done ? null : onTap,
+      leading: CircleAvatar(
+        radius: 16,
+        backgroundColor: done ? AppColors.success : AppColors.surfaceElevated,
+        child: done
+            ? const Icon(
+                Icons.check_rounded,
+                size: 18,
+                color: AppColors.background,
+              )
+            : Text(
+                '$n',
+                style: AppTextStyles.caption.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+      ),
+      title: Text(
+        title,
+        style: AppTextStyles.titleSmall.copyWith(
+          decoration: done ? TextDecoration.lineThrough : null,
+          color: done ? AppColors.textSecondary : AppColors.textPrimary,
+        ),
+      ),
+      subtitle: Text(subtitle, style: AppTextStyles.caption),
+      trailing: done || onTap == null
+          ? null
+          : const Icon(Icons.chevron_right_rounded, color: AppColors.accent),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Gap.page, 0, Gap.page, Gap.md),
+      child: SurfaceCard(
+        borderColor: AppColors.accent,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Get started', style: AppTextStyles.title),
+            const SizedBox(height: 4),
+            Text(
+              'Set up ${app.tuition.name} in three steps.',
+              style: AppTextStyles.caption,
+            ),
+            const SizedBox(height: 8),
+            step(
+              1,
+              'Create your first class',
+              'e.g. Class 5 · 4:00 – 5:00 PM',
+              hasClass,
+              () => pushPage(context, const ClassFormScreen()),
+            ),
+            step(
+              2,
+              'Add a student',
+              hasClass ? 'Admission with optional fee' : 'Needs a class first',
+              hasStudent,
+              hasClass
+                  ? () => pushPage(context, const StudentFormScreen())
+                  : null,
+            ),
+            step(
+              3,
+              'Invite a teacher',
+              'Optional · they get an invite code',
+              hasStaff,
+              () => pushPage(context, const StaffFormScreen()),
+            ),
+          ],
+        ),
       ),
     );
   }

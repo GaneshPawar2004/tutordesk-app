@@ -71,8 +71,11 @@ class ClassDetailScreen extends StatelessWidget {
       selected: app.staff.forClass(classId).map((s) => s.id).toSet(),
     );
     if (picked != null && context.mounted) {
-      app.staff.assignToClass(classId, picked);
-      AppToast.show(context, 'Staff assignment updated');
+      await runAction(
+        context,
+        () => app.assignStaffToClass(classId, picked),
+        success: 'Staff assignment updated',
+      );
     }
   }
 
@@ -83,7 +86,7 @@ class ClassDetailScreen extends StatelessWidget {
     final cls = app.academic.classById(classId);
     final year = app.selectedYear;
     final staff = app.staff.forClass(classId);
-    final session = app.todaySession(classId);
+    final session = app.todaySessionFor(classId);
 
     return AppScaffold(
       title: cls.name,
@@ -265,7 +268,7 @@ class _ClassFormScreenState extends State<ClassFormScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_subjects.isEmpty) {
       AppToast.show(
@@ -281,28 +284,28 @@ class _ClassFormScreenState extends State<ClassFormScreen> {
         .map((s) => s.id)
         .toList();
     final c = widget.schoolClass;
-    if (c == null) {
-      app.academic.addClass(
-        name: _name.text.trim(),
-        grade: int.parse(_grade.text),
-        sessionLabel: _timing.text.trim(),
-        room: _room.text.trim(),
-        subjectIds: subjectIds,
-      );
-      AppToast.show(context, 'Class added');
-    } else {
-      app.academic.updateClass(
-        c,
-        name: _name.text.trim(),
-        grade: int.parse(_grade.text),
-        sessionLabel: _timing.text.trim(),
-        room: _room.text.trim(),
-        subjectIds: subjectIds,
-        isActive: _active,
-      );
-      AppToast.show(context, 'Class updated');
-    }
-    Navigator.of(context).pop();
+    final ok = await runAction(
+      context,
+      () => c == null
+          ? app.addClass(
+              name: _name.text.trim(),
+              grade: int.parse(_grade.text),
+              sessionLabel: _timing.text.trim(),
+              room: _room.text.trim(),
+              subjectIds: subjectIds,
+            )
+          : app.updateClass(
+              c,
+              name: _name.text.trim(),
+              grade: int.parse(_grade.text),
+              sessionLabel: _timing.text.trim(),
+              room: _room.text.trim(),
+              subjectIds: subjectIds,
+              isActive: _active,
+            ),
+      success: c == null ? 'Class added' : 'Class updated',
+    );
+    if (ok && mounted) Navigator.of(context).pop();
   }
 
   @override

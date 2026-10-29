@@ -7,6 +7,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/app_scope.dart';
+import '../../data/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/widgets.dart';
 import 'exam_results_screen.dart';
@@ -24,7 +25,7 @@ class MarksEntryScreen extends StatefulWidget {
 }
 
 class _MarksEntryScreenState extends State<MarksEntryScreen> {
-  late final Exam _exam;
+  late Exam _exam;
   late String _subjectId;
   late final List<Student> _roster;
 
@@ -116,6 +117,27 @@ class _MarksEntryScreenState extends State<MarksEntryScreen> {
   }
 
   /// Saves all subjects. Returns false if blocked by validation or cancelled.
+  /// Subjects whose entries differ from what is saved.
+  List<String> _changedSubjects() => [
+    for (final s in _exam.subjects)
+      if (!_sameEntries(
+        _exam.marks[s.subjectId] ?? const {},
+        _entriesFor(s.subjectId),
+      ))
+        s.subjectId,
+  ];
+
+  static bool _sameEntries(Map<String, MarkEntry> a, Map<String, MarkEntry> b) {
+    if (a.length != b.length) return false;
+    for (final e in b.entries) {
+      final o = a[e.key];
+      if (o == null || o.absent != e.value.absent || o.marks != e.value.marks) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   Future<bool> _saveAll({bool quiet = false}) async {
     if (_errorCount() > 0) {
       AppToast.show(
@@ -139,14 +161,23 @@ class _MarksEntryScreenState extends State<MarksEntryScreen> {
       );
       if (note == null || !mounted) return false;
     }
-    for (final s in _exam.subjects) {
-      app.saveMarks(
-        _exam,
-        s.subjectId,
-        _entriesFor(s.subjectId),
-        correctionNote: s.subjectId == _subjectId ? note : null,
-      );
+    try {
+      for (final id in _changedSubjects()) {
+        await app.saveMarks(
+          _exam,
+          id,
+          _entriesFor(id),
+          correctionNote: note,
+          resync: false,
+        );
+      }
+      await app.refresh();
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return false;
     }
+    if (!mounted) return false;
+    _exam = app.exams.byId(_exam.id);
     setState(() => _dirty = false);
     if (!quiet && mounted) {
       AppToast.show(
@@ -196,10 +227,16 @@ class _MarksEntryScreenState extends State<MarksEntryScreen> {
       icon: Icons.publish_rounded,
     );
     if (!ok || !mounted) return;
-    for (final s in _exam.subjects) {
-      app.saveMarks(_exam, s.subjectId, _entriesFor(s.subjectId));
+    try {
+      for (final id in _changedSubjects()) {
+        await app.saveMarks(_exam, id, _entriesFor(id), resync: false);
+      }
+      await app.publishResults(_exam);
+    } on ApiException catch (e) {
+      if (mounted) AppToast.show(context, e.message, type: ToastType.error);
+      return;
     }
-    app.publishResults(_exam);
+    if (!mounted) return;
     setState(() => _dirty = false);
     Navigator.of(context).pop();
     AppToast.show(context, 'Results published');

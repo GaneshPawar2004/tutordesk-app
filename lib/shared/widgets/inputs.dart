@@ -65,6 +65,7 @@ class CustomTextField extends StatelessWidget {
     this.textCapitalization = TextCapitalization.none,
     this.maxLength,
     this.autofocus = false,
+    this.obscureText = false,
   });
 
   final String label;
@@ -85,6 +86,7 @@ class CustomTextField extends StatelessWidget {
   final TextCapitalization textCapitalization;
   final int? maxLength;
   final bool autofocus;
+  final bool obscureText;
 
   @override
   Widget build(BuildContext context) {
@@ -96,6 +98,7 @@ class CustomTextField extends StatelessWidget {
           controller: controller,
           enabled: enabled,
           autofocus: autofocus,
+          obscureText: obscureText,
           keyboardType: keyboardType,
           validator: validator,
           maxLines: maxLines,
