@@ -1,13 +1,22 @@
 import 'package:flutter/material.dart';
 
+import '../../data/api.dart';
+import '../../data/app_state.dart';
 import '../../widgets/auth_widgets.dart';
 import '../../widgets/common.dart';
 
 /// Shown after the reset OTP is verified: choose a new password.
 class ResetPasswordScreen extends StatefulWidget {
-  const ResetPasswordScreen({super.key, required this.email});
+  const ResetPasswordScreen({
+    super.key,
+    required this.email,
+    required this.resetToken,
+  });
 
   final String email;
+
+  /// Proof from the server that the reset code was verified.
+  final String resetToken;
 
   @override
   State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
@@ -30,8 +39,14 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    // TODO(backend): update password.
-    await Future.delayed(const Duration(milliseconds: 700));
+    try {
+      await appState.resetPassword(widget.resetToken, _passCtrl.text);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      showError(context, e.message);
+      return;
+    }
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     Navigator.of(context).popUntil((r) => r.isFirst);

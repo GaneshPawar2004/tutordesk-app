@@ -107,7 +107,9 @@ Future<void> showCollectFeeDialog(BuildContext context, Student s) async {
   );
 
   if (amount != null && context.mounted) {
-    appState.collectFee(s, amount);
-    showSuccess(context, '${formatMoney(amount)} collected from ${s.name}');
+    if (await runApi(context, () => appState.collectFee(s, amount)) &&
+        context.mounted) {
+      showSuccess(context, '${formatMoney(amount)} collected from ${s.name}');
+    }
   }
 }

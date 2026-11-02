@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:teachers_app/data/app_state.dart';
 import 'package:teachers_app/main.dart';
 
+import 'fake_api.dart';
+
 Future<void> _phone(WidgetTester tester) async {
   tester.view.physicalSize = const Size(1080, 2400); // 360 x 800 dp
   tester.view.devicePixelRatio = 3;
@@ -33,7 +35,9 @@ Future<void> _tap(WidgetTester tester, Finder f) async {
 void main() {
   testWidgets('signup → OTP → dashboard', (tester) async {
     await _phone(tester);
+    FakeApi();
     await tester.pumpWidget(const TeachersApp());
+    await tester.pumpAndSettle();
 
     await _tap(tester, find.text('Create Account'));
     await tester.pumpAndSettle();
@@ -62,7 +66,9 @@ void main() {
 
   testWidgets('forgot password → OTP → reset → login', (tester) async {
     await _phone(tester);
+    FakeApi();
     await tester.pumpWidget(const TeachersApp());
+    await tester.pumpAndSettle();
 
     await _tap(tester, find.text('Forgot password?'));
     await tester.pumpAndSettle();
@@ -88,7 +94,9 @@ void main() {
 
   testWidgets('main teacher flow', (tester) async {
     await _phone(tester);
+    FakeApi();
     await tester.pumpWidget(const TeachersApp());
+    await tester.pumpAndSettle();
 
     // Login
     await _enter(tester, 'Mobile number or email', 'teacher@example.com');

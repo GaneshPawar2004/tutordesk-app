@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../data/api.dart';
 import '../../data/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
@@ -108,8 +109,17 @@ class _OtpScreenState extends State<OtpScreen> {
     return KeyEventResult.ignored;
   }
 
+  String get _purposeName =>
+      widget.purpose == OtpPurpose.signup ? 'signup' : 'reset';
+
   Future<void> _resend() async {
-    // TODO(backend): resend OTP.
+    try {
+      await appState.resendOtp(widget.email, _purposeName);
+    } on ApiException catch (e) {
+      if (mounted) showError(context, e.message);
+      return;
+    }
+    if (!mounted) return;
     for (final c in _ctrls) {
       c.clear();
     }
@@ -128,14 +138,26 @@ class _OtpScreenState extends State<OtpScreen> {
     }
     FocusScope.of(context).unfocus();
     setState(() => _loading = true);
-    // TODO(backend): verify OTP. Any 6-digit code is accepted for now.
-    await Future.delayed(const Duration(milliseconds: 700));
+    String? resetToken;
+    try {
+      if (widget.purpose == OtpPurpose.signup) {
+        await appState.verifyEmail(widget.email, _code);
+      } else {
+        resetToken = await appState.verifyResetOtp(widget.email, _code);
+      }
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.message;
+      });
+      return;
+    }
     if (!mounted) return;
     setState(() => _loading = false);
 
     switch (widget.purpose) {
       case OtpPurpose.signup:
-        appState.login(email: widget.email, name: widget.name);
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const HomeShell()),
           (_) => false,
@@ -143,7 +165,10 @@ class _OtpScreenState extends State<OtpScreen> {
       case OtpPurpose.resetPassword:
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => ResetPasswordScreen(email: widget.email),
+            builder: (_) => ResetPasswordScreen(
+              email: widget.email,
+              resetToken: resetToken!,
+            ),
           ),
         );
     }

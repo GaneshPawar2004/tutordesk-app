@@ -21,10 +21,15 @@ class UsersScreen extends StatelessWidget {
       );
       if (!ok || !context.mounted) return;
     }
-    if (!appState.toggleUserActive(u)) {
+    final allowed = await runApiValue(
+      context,
+      () => appState.toggleUserActive(u),
+    );
+    if (allowed == null || !context.mounted) return;
+    if (!allowed) {
       showNotice(
         context,
-        'Your plan includes ${AppState.staffLoginLimit} staff login(s). '
+        'Your plan includes ${appState.staffLoginLimit} staff login(s). '
         'Add staff logins for ₹500/user per year from Subscriptions to '
         'activate ${u.name}.',
         title: 'Upgrade required',
@@ -53,7 +58,7 @@ class UsersScreen extends StatelessWidget {
       body: ListenableBuilder(
         listenable: appState,
         builder: (context, _) {
-          const limit = AppState.staffLoginLimit;
+          final limit = appState.staffLoginLimit;
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
             children: [
@@ -70,9 +75,9 @@ class UsersScreen extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     const TextSpan(text: ' of '),
-                    const TextSpan(
+                    TextSpan(
                       text: '$limit',
-                      style: TextStyle(fontWeight: FontWeight.w700),
+                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     const TextSpan(
                       text:
@@ -118,8 +123,10 @@ class UsersScreen extends StatelessWidget {
                       message: 'This staff login will be removed.',
                     );
                     if (ok && context.mounted) {
-                      appState.deleteUser(u);
-                      showSuccess(context, 'User deleted');
+                      if (await runApi(context, () => appState.deleteUser(u)) &&
+                          context.mounted) {
+                        showSuccess(context, 'User deleted');
+                      }
                     }
                   },
                 ),

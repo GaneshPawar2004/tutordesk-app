@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../data/api.dart';
+import '../../data/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../widgets/auth_widgets.dart';
+import '../../widgets/common.dart';
 import 'otp_screen.dart';
 
 /// Screen 3: user enters registered email to receive a password-reset OTP.
@@ -28,16 +31,21 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    // TODO(backend): send password-reset OTP to email.
-    await Future.delayed(const Duration(milliseconds: 700));
+    final email = _emailCtrl.text.trim().toLowerCase();
+    try {
+      await appState.forgotPassword(email);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      showError(context, e.message);
+      return;
+    }
     if (!mounted) return;
     setState(() => _loading = false);
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => OtpScreen(
-          email: _emailCtrl.text.trim(),
-          purpose: OtpPurpose.resetPassword,
-        ),
+        builder: (_) =>
+            OtpScreen(email: email, purpose: OtpPurpose.resetPassword),
       ),
     );
   }

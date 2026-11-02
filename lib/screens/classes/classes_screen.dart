@@ -23,11 +23,14 @@ class _ClassesScreenState extends State<ClassesScreen> {
     final name = await showClassNameDialog(context, initial: existing?.name);
     if (name == null || !mounted) return;
     if (existing == null) {
-      appState.addClass(name);
-      showSuccess(context, 'Class added successfully!');
+      if (await runApi(context, () => appState.addClass(name)) && mounted) {
+        showSuccess(context, 'Class added successfully!');
+      }
     } else {
-      appState.renameClass(existing, name);
-      showSuccess(context, 'Class renamed successfully!');
+      if (await runApi(context, () => appState.renameClass(existing, name)) &&
+          mounted) {
+        showSuccess(context, 'Class renamed successfully!');
+      }
     }
   }
 
@@ -68,8 +71,9 @@ class _ClassesScreenState extends State<ClassesScreen> {
             'All students, attendance and tests of this class will be removed.',
       );
       if (ok && mounted) {
-        appState.deleteClass(c);
-        showSuccess(context, 'Class deleted');
+        if (await runApi(context, () => appState.deleteClass(c)) && mounted) {
+          showSuccess(context, 'Class deleted');
+        }
       }
     }
   }

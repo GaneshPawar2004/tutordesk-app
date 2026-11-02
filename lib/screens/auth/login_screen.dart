@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../data/api.dart';
 import '../../data/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
@@ -7,6 +8,7 @@ import '../../widgets/auth_widgets.dart';
 import '../../widgets/common.dart';
 import '../home/home_shell.dart';
 import 'forgot_password_screen.dart';
+import 'otp_screen.dart';
 import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -33,11 +35,26 @@ class _LoginScreenState extends State<LoginScreen> {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    // TODO(backend): call login API.
-    await Future.delayed(const Duration(milliseconds: 700));
+    try {
+      await appState.login(_idCtrl.text.trim(), _passCtrl.text);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      if (e.code == 'EMAIL_NOT_VERIFIED' && isValidEmail(_idCtrl.text)) {
+        // Unfinished signup: send a fresh code and verify now.
+        final email = _idCtrl.text.trim().toLowerCase();
+        appState.resendOtp(email, 'signup').ignore();
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => OtpScreen(email: email, purpose: OtpPurpose.signup),
+          ),
+        );
+      }
+      showError(context, e.message);
+      return;
+    }
     if (!mounted) return;
     setState(() => _loading = false);
-    appState.login(email: _idCtrl.text.trim());
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const HomeShell()),
       (_) => false,

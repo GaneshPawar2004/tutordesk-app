@@ -38,16 +38,32 @@ class _AttendanceViewState extends State<AttendanceView> {
     _load();
   }
 
+  bool _loading = false;
+
   /// Loads saved attendance for [_date], defaulting everyone to Present.
-  void _load() {
-    final saved = appState.attendanceFor(widget.schoolClass.id, _date);
-    _marks
-      ..clear()
-      ..addEntries(
-        _students.map(
-          (s) => MapEntry(s.id, saved?[s.id] ?? AttendanceStatus.present),
-        ),
-      );
+  Future<void> _load() async {
+    final date = _date;
+    setState(() {
+      _loading = true;
+      _marks
+        ..clear()
+        ..addEntries(
+          _students.map((s) => MapEntry(s.id, AttendanceStatus.present)),
+        );
+    });
+    try {
+      final saved = await appState.loadAttendance(widget.schoolClass.id, date);
+      if (!mounted || date != _date) return;
+      setState(() {
+        for (final s in _students) {
+          _marks[s.id] = saved?[s.id] ?? AttendanceStatus.present;
+        }
+      });
+    } catch (e) {
+      if (mounted) showError(context, '$e');
+    } finally {
+      if (mounted && date == _date) setState(() => _loading = false);
+    }
   }
 
   int _count(AttendanceStatus s) => _marks.values.where((v) => v == s).length;
@@ -59,14 +75,17 @@ class _AttendanceViewState extends State<AttendanceView> {
       lastDate: DateTime.now(),
     );
     if (picked?.date == null) return;
-    setState(() {
-      _date = DateUtils.dateOnly(picked!.date!);
-      _load();
-    });
+    _date = DateUtils.dateOnly(picked!.date!);
+    _load();
   }
 
-  void _save() {
-    appState.saveAttendance(widget.schoolClass.id, _date, _marks);
+  Future<void> _save() async {
+    if (_loading) return;
+    final ok = await runApi(
+      context,
+      () => appState.saveAttendance(widget.schoolClass.id, _date, _marks),
+    );
+    if (!ok || !mounted) return;
     showNotice(
       context,
       '✅ Attendance saved for ${formatDate(_date)}.\n'
@@ -179,6 +198,11 @@ class _AttendanceViewState extends State<AttendanceView> {
                     ),
                   ),
                 ),
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: LinearProgressIndicator(),
+                  ),
                 const SizedBox(height: 12),
                 const InfoBanner(
                   children: [

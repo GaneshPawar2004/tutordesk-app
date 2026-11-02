@@ -411,6 +411,48 @@ void showError(BuildContext context, String message) {
 }
 
 /// Placeholder for actions that need the backend / native integrations.
+/// Runs a server call behind a blocking progress spinner. Returns its value,
+/// or null after showing the error to the user.
+Future<T?> runApiValue<T>(
+  BuildContext context,
+  Future<T> Function() call,
+) async {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final messenger = ScaffoldMessenger.of(context);
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    useRootNavigator: true,
+    builder: (_) => const PopScope(
+      canPop: false,
+      child: Center(child: CircularProgressIndicator()),
+    ),
+  );
+  try {
+    return await call();
+  } catch (e) {
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('$e', style: const TextStyle(fontSize: 13)),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    return null;
+  } finally {
+    navigator.pop();
+  }
+}
+
+/// [runApiValue] for calls without a result: true when it succeeded.
+Future<bool> runApi(BuildContext context, Future<void> Function() call) async =>
+    await runApiValue<bool>(context, () async {
+      await call();
+      return true;
+    }) ??
+    false;
+
 void showComingSoon(BuildContext context, String feature) => showInfo(
   context,
   '$feature will be available once the backend is connected.',

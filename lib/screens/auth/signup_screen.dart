@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../data/api.dart';
+import '../../data/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../widgets/auth_widgets.dart';
+import '../../widgets/common.dart';
 import 'otp_screen.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -41,14 +44,27 @@ class _SignupScreenState extends State<SignupScreen> {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    // TODO(backend): register user & send OTP to email.
-    await Future.delayed(const Duration(milliseconds: 700));
+    final email = _emailCtrl.text.trim().toLowerCase();
+    try {
+      await appState.register(
+        name: _nameCtrl.text.trim(),
+        email: email,
+        mobile: _mobileCtrl.text.trim(),
+        password: _passCtrl.text,
+        referralCode: _referralCtrl.text.trim(),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      showError(context, e.message);
+      return;
+    }
     if (!mounted) return;
     setState(() => _loading = false);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => OtpScreen(
-          email: _emailCtrl.text.trim(),
+          email: email,
           purpose: OtpPurpose.signup,
           name: _nameCtrl.text.trim(),
         ),

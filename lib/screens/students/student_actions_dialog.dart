@@ -131,8 +131,12 @@ Future<void> showStudentActionsDialog(
               );
               if (!ok) return;
             }
-            appState.toggleStudentDisabled(s);
-            if (context.mounted) {
+            if (!context.mounted) return;
+            final done = await runApi(
+              context,
+              () => appState.toggleStudentDisabled(s),
+            );
+            if (done && context.mounted) {
               showSuccess(
                 context,
                 s.disabled ? 'Student disabled' : 'Student enabled',
@@ -153,8 +157,10 @@ Future<void> showStudentActionsDialog(
                   'This removes the student with all attendance, marks and fee records.',
             );
             if (ok && context.mounted) {
-              appState.deleteStudent(s);
-              showSuccess(context, 'Student deleted');
+              if (await runApi(context, () => appState.deleteStudent(s)) &&
+                  context.mounted) {
+                showSuccess(context, 'Student deleted');
+              }
             }
           }),
         ),

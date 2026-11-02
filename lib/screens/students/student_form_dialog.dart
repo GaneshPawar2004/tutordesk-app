@@ -66,33 +66,26 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
     return isValidMobile(value) ? null : 'Enter a valid 10-digit number';
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final fees = double.tryParse(_fees.text.trim()) ?? 0;
-    final s =
-        widget.student ??
-        Student(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          classId: widget.schoolClass.id,
-          name: '',
-        );
-    s
-      ..name = _name.text.trim()
-      ..fatherName = _father.text.trim()
-      ..contact = _contact.text.trim()
-      ..parentMobile = _parent.text.trim()
-      ..rollNo = _roll.text.trim()
-      ..email = _email.text.trim()
-      ..dateOfBirth = _dob
-      ..totalFees = fees
-      ..feesDueDate = _dueDate;
-
-    if (_isEdit) {
-      appState.updateStudent();
-    } else {
-      appState.addStudent(s);
-    }
-    Navigator.of(context).pop(true);
+    final body = appState.studentBody(
+      name: _name.text.trim(),
+      fatherName: _father.text.trim(),
+      contact: _contact.text.trim(),
+      parentMobile: _parent.text.trim(),
+      rollNo: _roll.text.trim(),
+      email: _email.text.trim(),
+      dateOfBirth: _dob,
+      totalFees: double.tryParse(_fees.text.trim()) ?? 0,
+      feesDueDate: _dueDate,
+    );
+    final ok = await runApi(
+      context,
+      () => _isEdit
+          ? appState.updateStudent(widget.student!, body)
+          : appState.addStudent(widget.schoolClass.id, body),
+    );
+    if (ok && mounted) Navigator.of(context).pop(true);
   }
 
   @override

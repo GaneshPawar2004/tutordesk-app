@@ -60,35 +60,41 @@ class _EditMarksScreenState extends State<EditMarksScreen> {
 
   double? get _max => double.tryParse(_maxMarks.text.trim());
 
-  bool _save() {
+  Future<bool> _save() async {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) {
       showError(context, 'Please fix the highlighted fields.');
       return false;
     }
-    final t = widget.test
-      ..subject = _subject.text.trim()
-      ..maxMarks = _max!;
+    // Keep marks of students not shown here (e.g. disabled ones).
+    final marks = Map.of(widget.test.marks);
     for (final s in _students) {
-      t.marks[s.id] = StudentMark(
+      marks[s.id] = StudentMark(
         marks: double.tryParse(_marks[s.id]!.text.trim()),
         remarks: _remarks[s.id]!.text.trim(),
         skip: _skip[s.id]!,
       );
     }
-    appState.updateTest();
-    return true;
+    return runApi(
+      context,
+      () => appState.saveTest(
+        widget.test,
+        subject: _subject.text.trim(),
+        maxMarks: _max!,
+        marks: marks,
+      ),
+    );
   }
 
-  void _onSave() {
-    if (_save()) {
+  Future<void> _onSave() async {
+    if (await _save() && mounted) {
       showSuccess(context, 'Marks saved successfully!');
       Navigator.of(context).pop();
     }
   }
 
-  void _onSaveAndSend() {
-    if (_save()) showMarksSms(context, widget.test);
+  Future<void> _onSaveAndSend() async {
+    if (await _save() && mounted) showMarksSms(context, widget.test);
   }
 
   @override

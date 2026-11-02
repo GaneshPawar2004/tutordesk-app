@@ -1,46 +1,227 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'api.dart';
 import 'models.dart';
 
-/// In-memory store for the frontend. Replace method bodies with API calls
-/// once the backend is ready; screens only talk to this class.
+/// Client-side cache of the signed-in institute's data, backed by the Kaksha
+/// API. Screens read the cached lists synchronously; every change goes to the
+/// server first and updates the cache when it succeeds (errors are thrown as
+/// [ApiException] for the screen to show).
 class AppState extends ChangeNotifier {
-  AppState._();
+  AppState._() {
+    api.onUnauthorized = _expireSession;
+  }
   static final AppState instance = AppState._();
 
-  /// Number of staff logins included in the current plan (admin not counted).
-  static const int staffLoginLimit = 0;
+  static const _tokenKey = 'auth_token';
 
   // ---- Session -----------------------------------------------------------
   String? userName;
   String? userEmail;
-  int trialDaysRemaining = 14;
+  String role = 'owner';
+  bool canAccessFees = true;
+  int trialDaysRemaining = 0;
 
-  bool get isLoggedIn => userEmail != null;
+  /// Number of staff logins included in the current plan (admin not counted).
+  int staffLoginLimit = 0;
 
-  void login({required String email, String? name}) {
-    userEmail = email;
-    userName = name ?? email.split('@').first;
+  bool get isLoggedIn => api.token != null && userEmail != null;
+  bool get isOwner => role == 'owner';
+
+  /// Called when the server ends the session (token expired, password reset,
+  /// login blocked); the app shows the login screen.
+  VoidCallback? onSessionExpired;
+
+  /// Restores the saved login on app start. Returns false if there is none
+  /// or it is no longer valid; throws [ApiException] if the server can't be
+  /// reached.
+  Future<bool> restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString(_tokenKey);
+    if (token == null) return false;
+    api.token = token;
+    try {
+      final me = await api.get('/auth/me');
+      _applySession(me);
+      await loadAll();
+      return true;
+    } on ApiException catch (e) {
+      if (e.status == 401 || e.status == 403) {
+        await _clearSession();
+        return false;
+      }
+      rethrow;
+    }
+  }
+
+  /// Owner signup: creates the account and emails a verification code.
+  Future<void> register({
+    required String name,
+    required String email,
+    required String mobile,
+    required String password,
+    String referralCode = '',
+  }) => api.post('/auth/register', {
+    'name': name,
+    'email': email,
+    'mobile': mobile,
+    'password': password,
+    if (referralCode.isNotEmpty) 'referralCode': referralCode,
+  });
+
+  Future<void> verifyEmail(String email, String code) async => _startSession(
+    await api.post('/auth/verify-email', {'email': email, 'code': code}),
+  );
+
+  Future<void> login(String identifier, String password) async => _startSession(
+    await api.post('/auth/login', {
+      'identifier': identifier,
+      'password': password,
+    }),
+  );
+
+  /// [purpose] is 'signup' or 'reset'.
+  Future<void> resendOtp(String email, String purpose) =>
+      api.post('/auth/resend-otp', {'email': email, 'purpose': purpose});
+
+  Future<void> forgotPassword(String email) =>
+      api.post('/auth/forgot-password', {'email': email});
+
+  /// Returns the reset token for [resetPassword].
+  Future<String> verifyResetOtp(String email, String code) async {
+    final res = await api.post('/auth/verify-reset-otp', {
+      'email': email,
+      'code': code,
+    });
+    return res['resetToken'] as String;
+  }
+
+  Future<void> resetPassword(String resetToken, String password) => api.post(
+    '/auth/reset-password',
+    {'resetToken': resetToken, 'password': password},
+  );
+
+  Future<void> logout() async {
+    await _clearSession();
     notifyListeners();
   }
 
-  void logout() {
-    userEmail = null;
+  Future<void> _startSession(dynamic res) async {
+    api.token = res['token'] as String;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, api.token!);
+    _applySession(res);
+    await loadAll();
+  }
+
+  void _applySession(dynamic res) {
+    final user = res['user'] as Map<String, dynamic>;
+    final inst = res['institute'] as Map<String, dynamic>?;
+    userName = user['name'] as String?;
+    userEmail = user['email'] as String?;
+    role = user['role'] as String? ?? 'owner';
+    canAccessFees = user['canAccessFees'] as bool? ?? false;
+    trialDaysRemaining = (inst?['trialDaysRemaining'] as num?)?.toInt() ?? 0;
+    staffLoginLimit = (inst?['staffLoginLimit'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<void> _clearSession() async {
+    api.token = null;
     userName = null;
+    userEmail = null;
+    classes.clear();
+    students.clear();
+    tests.clear();
+    users.clear();
+    presentToday = 0;
+    _invalidateAttendance();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tokenKey);
+  }
+
+  void _expireSession() {
+    if (!isLoggedIn) return;
+    _clearSession().then((_) {
+      notifyListeners();
+      onSessionExpired?.call();
+    });
+  }
+
+  // ---- Loading -------------------------------------------------------------
+  bool loading = false;
+
+  /// Reloads everything the screens show (classes, students, tests, staff,
+  /// dashboard). Called after sign-in and on pull-to-refresh.
+  Future<void> loadAll() async {
+    loading = true;
+    notifyListeners();
+    try {
+      final res = await api.get('/classes');
+      final loaded = [
+        for (final c in res['classes'] as List) SchoolClass.fromJson(c),
+      ];
+      final perClass = await Future.wait(
+        loaded.map(
+          (c) => Future.wait([
+            api.get('/classes/${c.id}/students'),
+            api.get('/classes/${c.id}/tests'),
+          ]),
+        ),
+      );
+      final usersRes = isOwner ? await api.get('/users') : null;
+
+      classes
+        ..clear()
+        ..addAll(loaded);
+      students.clear();
+      tests.clear();
+      for (final r in perClass) {
+        students.addAll([
+          for (final s in r[0]['students'] as List) Student.fromJson(s),
+        ]);
+        // API sends newest first; screens expect oldest first.
+        tests.addAll([
+          for (final t in (r[1]['tests'] as List).reversed)
+            ClassTest.fromJson(t),
+        ]);
+      }
+      users.clear();
+      if (usersRes != null) {
+        staffLoginLimit = (usersRes['staffLoginLimit'] as num).toInt();
+        users.addAll([
+          for (final u in usersRes['users'] as List) StaffUser.fromJson(u),
+        ]);
+      }
+      _invalidateAttendance();
+      await refreshDashboard();
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Present-today count and trial days from the server.
+  Future<void> refreshDashboard() async {
+    final d = await api.get('/dashboard', {'date': dateKey(DateTime.now())});
+    presentToday = (d['presentToday'] as num).toInt();
+    trialDaysRemaining = (d['trialDaysRemaining'] as num).toInt();
     notifyListeners();
   }
 
   // ---- Classes -----------------------------------------------------------
   final List<SchoolClass> classes = [];
 
-  SchoolClass addClass(String name) {
-    final c = SchoolClass(id: _id(), name: name);
+  Future<SchoolClass> addClass(String name) async {
+    final res = await api.post('/classes', {'name': name});
+    final c = SchoolClass.fromJson(res['class']);
     classes.add(c);
     notifyListeners();
     return c;
   }
 
-  void renameClass(SchoolClass c, String name) {
+  Future<void> renameClass(SchoolClass c, String name) async {
+    await api.patch('/classes/${c.id}', {'name': name});
     c.name = name;
     notifyListeners();
   }
@@ -52,12 +233,14 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void deleteClass(SchoolClass c) {
+  Future<void> deleteClass(SchoolClass c) async {
+    await api.delete('/classes/${c.id}');
     classes.remove(c);
     students.removeWhere((s) => s.classId == c.id);
     tests.removeWhere((t) => t.classId == c.id);
-    _attendance.remove(c.id);
+    _invalidateAttendance();
     notifyListeners();
+    refreshDashboard().ignore();
   }
 
   SchoolClass? classById(String id) {
@@ -77,34 +260,91 @@ class AppState extends ChangeNotifier {
           )
           .toList();
 
-  void addStudent(Student s) {
+  /// Body for creating/updating a student. Fee fields are sent only with fee
+  /// access (the server rejects them otherwise).
+  Map<String, dynamic> studentBody({
+    required String name,
+    required String fatherName,
+    required String contact,
+    required String parentMobile,
+    required String rollNo,
+    required String email,
+    required DateTime? dateOfBirth,
+    required double totalFees,
+    required DateTime? feesDueDate,
+  }) => {
+    'name': name,
+    'fatherName': fatherName,
+    'contact': contact,
+    'parentMobile': parentMobile,
+    'rollNo': rollNo,
+    'email': email,
+    'dateOfBirth': dateOfBirth == null ? null : dateKey(dateOfBirth),
+    if (canAccessFees) ...{
+      'totalFees': totalFees,
+      'feesDueDate': feesDueDate == null ? null : dateKey(feesDueDate),
+    },
+  };
+
+  Future<Student> addStudent(String classId, Map<String, dynamic> body) async {
+    final res = await api.post('/classes/$classId/students', body);
+    final s = Student.fromJson(res['student']);
     students.add(s);
+    _invalidateAttendance();
+    notifyListeners();
+    return s;
+  }
+
+  Future<void> updateStudent(Student s, Map<String, dynamic> body) async {
+    final res = await api.patch('/students/${s.id}', body);
+    _assignStudent(s, res['student']);
     notifyListeners();
   }
 
-  void updateStudent() => notifyListeners();
-
-  void toggleStudentDisabled(Student s) {
-    s.disabled = !s.disabled;
+  Future<void> toggleStudentDisabled(Student s) async {
+    final res = await api.patch('/students/${s.id}', {'disabled': !s.disabled});
+    _assignStudent(s, res['student']);
+    _invalidateAttendance();
     notifyListeners();
   }
 
-  void deleteStudent(Student s) {
+  Future<void> deleteStudent(Student s) async {
+    await api.delete('/students/${s.id}');
     students.remove(s);
     for (final t in tests) {
       t.marks.remove(s.id);
     }
-    for (final byDate in _attendance.values) {
-      for (final day in byDate.values) {
-        day.remove(s.id);
-      }
-    }
+    _invalidateAttendance();
     notifyListeners();
   }
 
-  void collectFee(Student s, double amount) {
-    s.feesPaid += amount;
+  Future<void> collectFee(Student s, double amount) async {
+    final res = await api.post('/students/${s.id}/fees/payments', {
+      'amount': amount,
+    });
+    _assignStudent(s, res['student']);
     notifyListeners();
+  }
+
+  /// Copies server values into the existing object so screens holding it
+  /// see the change.
+  void _assignStudent(Student s, Map<String, dynamic> json) {
+    final f = Student.fromJson(json);
+    s
+      ..name = f.name
+      ..fatherName = f.fatherName
+      ..contact = f.contact
+      ..parentMobile = f.parentMobile
+      ..rollNo = f.rollNo
+      ..email = f.email
+      ..dateOfBirth = f.dateOfBirth
+      ..disabled = f.disabled;
+    if (json.containsKey('totalFees')) {
+      s
+        ..totalFees = f.totalFees
+        ..feesPaid = f.feesPaid
+        ..feesDueDate = f.feesDueDate;
+    }
   }
 
   // ---- Fees summary ------------------------------------------------------
@@ -121,59 +361,106 @@ class AppState extends ChangeNotifier {
       classId == null ? students : students.where((s) => s.classId == classId);
 
   // ---- Attendance --------------------------------------------------------
-  /// classId -> dateKey(yyyy-mm-dd) -> studentId -> status
-  final Map<String, Map<String, Map<String, AttendanceStatus>>> _attendance =
-      {};
+  int presentToday = 0;
 
   static String dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  Map<String, AttendanceStatus>? attendanceFor(String classId, DateTime date) =>
-      _attendance[classId]?[dateKey(date)];
+  static AttendanceStatus _status(Object? v) => AttendanceStatus.values
+      .firstWhere((s) => s.name == v, orElse: () => AttendanceStatus.present);
 
-  void saveAttendance(
+  /// Saved attendance of a class for [date], or null if not saved yet.
+  Future<Map<String, AttendanceStatus>?> loadAttendance(
+    String classId,
+    DateTime date,
+  ) async {
+    final res = await api.get('/classes/$classId/attendance', {
+      'date': dateKey(date),
+    });
+    if (res['saved'] != true) return null;
+    return {
+      for (final r in res['records'] as List)
+        r['student'] as String: _status(r['status']),
+    };
+  }
+
+  Future<void> saveAttendance(
     String classId,
     DateTime date,
     Map<String, AttendanceStatus> marks,
-  ) {
-    _attendance.putIfAbsent(classId, () => {})[dateKey(date)] = Map.of(marks);
+  ) async {
+    await api.put('/classes/$classId/attendance', {
+      'date': dateKey(date),
+      'records': [
+        for (final e in marks.entries)
+          {'student': e.key, 'status': e.value.name},
+      ],
+    });
+    _invalidateAttendance();
     notifyListeners();
+    await refreshDashboard();
   }
 
-  int get presentToday {
-    final key = dateKey(DateTime.now());
-    var count = 0;
-    for (final byDate in _attendance.values) {
-      count +=
-          byDate[key]?.values
-              .where((s) => s == AttendanceStatus.present)
-              .length ??
-          0;
-    }
-    return count;
+  // Report totals and student histories are fetched when first shown and
+  // dropped whenever attendance or students change.
+  Map<String, Map<AttendanceStatus, int>>? _reportTotals;
+  bool _reportsLoading = false;
+  final Map<String, List<MapEntry<DateTime, AttendanceStatus>>> _histories = {};
+  final Set<String> _historiesLoading = {};
+
+  void _invalidateAttendance() {
+    _reportTotals = null;
+    _histories.clear();
   }
 
   /// Aggregated status counts across every saved day for a class.
   Map<AttendanceStatus, int> attendanceTotals(String classId) {
-    final totals = {for (final s in AttendanceStatus.values) s: 0};
-    for (final day
-        in _attendance[classId]?.values ??
-            const <Map<String, AttendanceStatus>>[]) {
-      for (final status in day.values) {
-        totals[status] = totals[status]! + 1;
-      }
-    }
-    return totals;
+    if (_reportTotals == null) _loadReports();
+    return _reportTotals?[classId] ??
+        {for (final s in AttendanceStatus.values) s: 0};
   }
 
+  Future<void> _loadReports() async {
+    if (_reportsLoading) return;
+    _reportsLoading = true;
+    try {
+      final res = await api.get('/reports');
+      _reportTotals = {
+        for (final r in res['attendance'] as List)
+          r['class'] as String: {
+            for (final s in AttendanceStatus.values)
+              s: ((r['counts'] as Map?)?[s.name] as num? ?? 0).toInt(),
+          },
+      };
+      notifyListeners();
+    } on ApiException {
+      // Shown as "no attendance" until the next refresh.
+    } finally {
+      _reportsLoading = false;
+    }
+  }
+
+  /// Attendance history of a student, newest first (empty until loaded).
   List<MapEntry<DateTime, AttendanceStatus>> attendanceHistoryOf(Student s) {
-    final out = <MapEntry<DateTime, AttendanceStatus>>[];
-    _attendance[s.classId]?.forEach((key, day) {
-      final status = day[s.id];
-      if (status != null) out.add(MapEntry(DateTime.parse(key), status));
-    });
-    out.sort((a, b) => b.key.compareTo(a.key));
-    return out;
+    final cached = _histories[s.id];
+    if (cached == null) _loadHistory(s.id);
+    return cached ?? const [];
+  }
+
+  Future<void> _loadHistory(String studentId) async {
+    if (!_historiesLoading.add(studentId)) return;
+    try {
+      final res = await api.get('/students/$studentId/attendance');
+      _histories[studentId] = [
+        for (final h in res['history'] as List)
+          MapEntry(DateTime.parse(h['date'] as String), _status(h['status'])),
+      ];
+      notifyListeners();
+    } on ApiException {
+      // Shown as empty until the next refresh.
+    } finally {
+      _historiesLoading.remove(studentId);
+    }
   }
 
   // ---- Tests -------------------------------------------------------------
@@ -182,21 +469,44 @@ class AppState extends ChangeNotifier {
   List<ClassTest> testsOf(String classId) =>
       tests.where((t) => t.classId == classId).toList();
 
-  ClassTest addTest(String classId, String subject, double maxMarks) {
-    final t = ClassTest(
-      id: _id(),
-      classId: classId,
-      subject: subject,
-      maxMarks: maxMarks,
-    );
+  Future<ClassTest> addTest(
+    String classId,
+    String subject,
+    double maxMarks,
+  ) async {
+    final res = await api.post('/classes/$classId/tests', {
+      'subject': subject,
+      'maxMarks': maxMarks,
+    });
+    final t = ClassTest.fromJson(res['test']);
     tests.add(t);
     notifyListeners();
     return t;
   }
 
-  void updateTest() => notifyListeners();
+  /// Saves test details and replaces all marks.
+  Future<void> saveTest(
+    ClassTest t, {
+    required String subject,
+    required double maxMarks,
+    required Map<String, StudentMark> marks,
+  }) async {
+    final res = await api.put('/tests/${t.id}', {
+      'subject': subject,
+      'maxMarks': maxMarks,
+      'marks': [for (final e in marks.entries) e.value.toJson(e.key)],
+    });
+    final saved = ClassTest.fromJson(res['test']);
+    t
+      ..subject = saved.subject
+      ..maxMarks = saved.maxMarks
+      ..marks.clear()
+      ..marks.addAll(saved.marks);
+    notifyListeners();
+  }
 
-  void deleteTest(ClassTest t) {
+  Future<void> deleteTest(ClassTest t) async {
+    await api.delete('/tests/${t.id}');
     tests.remove(t);
     notifyListeners();
   }
@@ -206,29 +516,50 @@ class AppState extends ChangeNotifier {
 
   int get activeUserCount => users.where((u) => u.active).length;
 
-  void addUser(StaffUser u) {
-    users.add(u);
+  /// [body]: name, subject, phone, email, salary, canAccessFees and
+  /// (required when adding, optional when editing) password.
+  Future<void> addUser(Map<String, dynamic> body) async {
+    final res = await api.post('/users', body);
+    users.add(StaffUser.fromJson(res['user']));
     notifyListeners();
   }
 
-  void updateUser() => notifyListeners();
+  Future<void> updateUser(StaffUser u, Map<String, dynamic> body) async {
+    final res = await api.patch('/users/${u.id}', body);
+    _assignUser(u, res['user']);
+    notifyListeners();
+  }
 
   /// Returns false when activating would exceed the plan's staff login limit.
-  bool toggleUserActive(StaffUser u) {
-    if (!u.active && activeUserCount >= staffLoginLimit) return false;
-    u.active = !u.active;
-    notifyListeners();
-    return true;
+  Future<bool> toggleUserActive(StaffUser u) async {
+    try {
+      final res = await api.patch('/users/${u.id}', {'active': !u.active});
+      _assignUser(u, res['user']);
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      if (e.code == 'PLAN_LIMIT') return false;
+      rethrow;
+    }
   }
 
-  void deleteUser(StaffUser u) {
+  Future<void> deleteUser(StaffUser u) async {
+    await api.delete('/users/${u.id}');
     users.remove(u);
     notifyListeners();
   }
 
-  // ------------------------------------------------------------------------
-  int _seq = 0;
-  String _id() => '${DateTime.now().microsecondsSinceEpoch}-${_seq++}';
+  void _assignUser(StaffUser u, Map<String, dynamic> json) {
+    final f = StaffUser.fromJson(json);
+    u
+      ..name = f.name
+      ..subject = f.subject
+      ..phone = f.phone
+      ..email = f.email
+      ..salary = f.salary
+      ..canAccessFees = f.canAccessFees
+      ..active = f.active;
+  }
 }
 
 final appState = AppState.instance;

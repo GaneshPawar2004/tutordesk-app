@@ -4,6 +4,7 @@ import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
+import '../../widgets/common.dart';
 
 /// Add / edit staff user dialog (screens 17 & 19). Returns true when saved.
 Future<bool?> showUserFormDialog(BuildContext context, {StaffUser? user}) {
@@ -27,7 +28,7 @@ class _UserFormDialogState extends State<_UserFormDialog> {
   late final _subject = TextEditingController(text: widget.user?.subject);
   late final _phone = TextEditingController(text: widget.user?.phone);
   late final _email = TextEditingController(text: widget.user?.email);
-  late final _password = TextEditingController(text: widget.user?.password);
+  final _password = TextEditingController();
   late final _salary = TextEditingController(
     text: widget.user?.salary == null
         ? ''
@@ -46,30 +47,24 @@ class _UserFormDialogState extends State<_UserFormDialog> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final u =
-        widget.user ??
-        StaffUser(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          name: '',
-          email: '',
-          password: '',
-        );
-    u
-      ..name = _name.text.trim()
-      ..subject = _subject.text.trim()
-      ..phone = _phone.text.trim()
-      ..email = _email.text.trim()
-      ..password = _password.text
-      ..salary = double.tryParse(_salary.text.trim())
-      ..canAccessFees = _canAccessFees;
-    if (_isEdit) {
-      appState.updateUser();
-    } else {
-      appState.addUser(u);
-    }
-    Navigator.of(context).pop(true);
+    final body = {
+      'name': _name.text.trim(),
+      'subject': _subject.text.trim(),
+      'phone': _phone.text.trim(),
+      'email': _email.text.trim().toLowerCase(),
+      'salary': double.tryParse(_salary.text.trim()),
+      'canAccessFees': _canAccessFees,
+      if (_password.text.isNotEmpty) 'password': _password.text,
+    };
+    final ok = await runApi(
+      context,
+      () => _isEdit
+          ? appState.updateUser(widget.user!, body)
+          : appState.addUser(body),
+    );
+    if (ok && mounted) Navigator.of(context).pop(true);
   }
 
   @override
@@ -153,9 +148,11 @@ class _UserFormDialogState extends State<_UserFormDialog> {
                       },
                     ),
                     _field(
-                      label: 'Password',
-                      required: true,
-                      hint: 'Min 6 characters',
+                      label: _isEdit ? 'New password' : 'Password',
+                      required: !_isEdit,
+                      hint: _isEdit
+                          ? 'Leave blank to keep current'
+                          : 'Min 6 characters',
                       icon: Icons.lock_outline,
                       controller: _password,
                       obscure: _obscure,
@@ -168,9 +165,11 @@ class _UserFormDialogState extends State<_UserFormDialog> {
                         ),
                         onPressed: () => setState(() => _obscure = !_obscure),
                       ),
-                      validator: (v) => (v == null || v.length < 6)
-                          ? 'Min 6 characters'
-                          : null,
+                      validator: (v) {
+                        final value = v ?? '';
+                        if (_isEdit && value.isEmpty) return null;
+                        return value.length < 6 ? 'Min 6 characters' : null;
+                      },
                     ),
                     _field(
                       label: 'Salary (₹)',

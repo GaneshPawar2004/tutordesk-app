@@ -25,7 +25,8 @@ class DashboardScreen extends StatelessWidget {
       confirmLabel: 'LOGOUT',
     );
     if (!ok || !context.mounted) return;
-    appState.logout();
+    await appState.logout();
+    if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (_) => false,
@@ -49,7 +50,8 @@ class DashboardScreen extends StatelessWidget {
                 case 'profile':
                   showInfo(
                     context,
-                    'Signed in as ${appState.userEmail ?? 'unknown'}',
+                    'Signed in as ${appState.userName ?? ''} '
+                    '(${appState.userEmail ?? 'unknown'})',
                   );
                 case 'subscription':
                   showComingSoon(context, 'Subscriptions');
@@ -70,91 +72,112 @@ class DashboardScreen extends StatelessWidget {
       ),
       body: ListenableBuilder(
         listenable: appState,
-        builder: (context, _) => ListView(
-          padding: const EdgeInsets.all(12),
-          children: [
-            _TrialBanner(days: appState.trialDaysRemaining),
-            const SizedBox(height: 12),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 1.75,
-              children: [
-                _StatTile(
-                  icon: Icons.school_outlined,
-                  value: '${appState.classes.length}',
-                  label: 'Classes',
-                  colors: AppColors.tileBlue,
-                  onTap: onOpenClasses,
-                ),
-                _StatTile(
-                  icon: Icons.people_outline,
-                  value: '${appState.students.length}',
-                  label: 'Students',
-                  colors: AppColors.tileGreen,
-                  onTap: onOpenClasses,
-                ),
-                _StatTile(
-                  icon: Icons.event_available_outlined,
-                  value: '${appState.presentToday}',
-                  label: 'Present Today',
-                  colors: AppColors.tileOrange,
-                  onTap: () => _push(context, const ReportsScreen()),
-                ),
-                _StatTile(
-                  icon: Icons.payments_outlined,
-                  value: formatMoney(appState.dueFeesOf(null)),
-                  label: 'Fees Due',
-                  colors: AppColors.tileRed,
-                  onTap: () => _push(context, const FeeDuesScreen()),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            const Text(
-              'Quick Actions',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children:
-                  [
-                        _QuickAction(
-                          icon: Icons.school_outlined,
-                          label: 'Classes',
-                          onTap: onOpenClasses,
-                        ),
-                        _QuickAction(
-                          icon: Icons.badge_outlined,
-                          label: 'Users',
-                          onTap: () => _push(context, const UsersScreen()),
-                        ),
-                        _QuickAction(
-                          icon: Icons.bar_chart,
-                          label: 'Reports',
-                          onTap: () => _push(context, const ReportsScreen()),
-                        ),
-                        _QuickAction(
-                          icon: Icons.request_quote_outlined,
-                          label: 'Fee Dues',
-                          onTap: () => _push(context, const FeeDuesScreen()),
-                        ),
-                      ]
-                      .expand(
-                        (w) => [Expanded(child: w), const SizedBox(width: 9)],
-                      )
-                      .toList()
-                    ..removeLast(),
-            ),
-            const SizedBox(height: 12),
-          ],
+        builder: (context, _) => RefreshIndicator(
+          onRefresh: () async {
+            try {
+              await appState.loadAll();
+            } catch (e) {
+              if (context.mounted) showError(context, '$e');
+            }
+          },
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(12),
+            children: [
+              _TrialBanner(days: appState.trialDaysRemaining),
+              const SizedBox(height: 12),
+              GridView.count(
+                crossAxisCount: 2,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: 1.75,
+                children: [
+                  _StatTile(
+                    icon: Icons.school_outlined,
+                    value: '${appState.classes.length}',
+                    label: 'Classes',
+                    colors: AppColors.tileBlue,
+                    onTap: onOpenClasses,
+                  ),
+                  _StatTile(
+                    icon: Icons.people_outline,
+                    value: '${appState.students.length}',
+                    label: 'Students',
+                    colors: AppColors.tileGreen,
+                    onTap: onOpenClasses,
+                  ),
+                  _StatTile(
+                    icon: Icons.event_available_outlined,
+                    value: '${appState.presentToday}',
+                    label: 'Present Today',
+                    colors: AppColors.tileOrange,
+                    onTap: () => _push(context, const ReportsScreen()),
+                  ),
+                  _StatTile(
+                    icon: Icons.payments_outlined,
+                    value: appState.canAccessFees
+                        ? formatMoney(appState.dueFeesOf(null))
+                        : '—',
+                    label: 'Fees Due',
+                    colors: AppColors.tileRed,
+                    onTap: () => _openFeeDues(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Quick Actions',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children:
+                    [
+                          _QuickAction(
+                            icon: Icons.school_outlined,
+                            label: 'Classes',
+                            onTap: onOpenClasses,
+                          ),
+                          _QuickAction(
+                            icon: Icons.badge_outlined,
+                            label: 'Users',
+                            onTap: () => appState.isOwner
+                                ? _push(context, const UsersScreen())
+                                : showInfo(
+                                    context,
+                                    'Only the admin can manage users.',
+                                  ),
+                          ),
+                          _QuickAction(
+                            icon: Icons.bar_chart,
+                            label: 'Reports',
+                            onTap: () => _push(context, const ReportsScreen()),
+                          ),
+                          _QuickAction(
+                            icon: Icons.request_quote_outlined,
+                            label: 'Fee Dues',
+                            onTap: () => _openFeeDues(context),
+                          ),
+                        ]
+                        .expand(
+                          (w) => [Expanded(child: w), const SizedBox(width: 9)],
+                        )
+                        .toList()
+                      ..removeLast(),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
         ),
       ),
     );
   }
+
+  void _openFeeDues(BuildContext context) => appState.canAccessFees
+      ? _push(context, const FeeDuesScreen())
+      : showInfo(context, 'You do not have access to fees.');
 }
 
 class _TrialBanner extends StatelessWidget {

@@ -22,8 +22,11 @@ class TestsView extends StatelessWidget {
   Future<void> _addTest(BuildContext context) async {
     final result = await _showAddTestDialog(context);
     if (result == null || !context.mounted) return;
-    final test = appState.addTest(schoolClass.id, result.$1, result.$2);
-    _openMarks(context, test);
+    final test = await runApiValue(
+      context,
+      () => appState.addTest(schoolClass.id, result.$1, result.$2),
+    );
+    if (test != null && context.mounted) _openMarks(context, test);
   }
 
   void _openMarks(BuildContext context, ClassTest test) {
@@ -83,8 +86,13 @@ class TestsView extends StatelessWidget {
                       '"${tests[i].subject}" and all its marks will be removed.',
                 );
                 if (ok && context.mounted) {
-                  appState.deleteTest(tests[i]);
-                  showSuccess(context, 'Test deleted');
+                  if (await runApi(
+                        context,
+                        () => appState.deleteTest(tests[i]),
+                      ) &&
+                      context.mounted) {
+                    showSuccess(context, 'Test deleted');
+                  }
                 }
               },
             ),
