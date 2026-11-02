@@ -8,6 +8,10 @@ import '../../widgets/common.dart';
 
 /// Records a fee payment for a student.
 Future<void> showCollectFeeDialog(BuildContext context, Student s) async {
+  if (!appState.canAccessFees) {
+    showInfo(context, 'You do not have access to fees.');
+    return;
+  }
   if (s.totalFees <= 0) {
     showError(context, 'Set total fees for ${s.name} first (Edit student).');
     return;

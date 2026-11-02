@@ -195,27 +195,30 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
                       helper: 'Used for birthday reminders.',
                       onChanged: (d) => setState(() => _dob = d),
                     ),
-                    LabeledField(
-                      label: 'Total fees',
-                      hint: 'Enter total fees',
-                      controller: _fees,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                    // Fee fields only with fee access (the server ignores them otherwise).
+                    if (appState.canAccessFees) ...[
+                      LabeledField(
+                        label: 'Total fees',
+                        hint: 'Enter total fees',
+                        controller: _fees,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        validator: (v) {
+                          final value = v?.trim() ?? '';
+                          if (value.isEmpty) return null;
+                          final n = double.tryParse(value);
+                          return (n == null || n < 0)
+                              ? 'Enter a valid amount'
+                              : null;
+                        },
                       ),
-                      validator: (v) {
-                        final value = v?.trim() ?? '';
-                        if (value.isEmpty) return null;
-                        final n = double.tryParse(value);
-                        return (n == null || n < 0)
-                            ? 'Enter a valid amount'
-                            : null;
-                      },
-                    ),
-                    DatePickerField(
-                      label: 'Fees due date',
-                      value: _dueDate,
-                      onChanged: (d) => setState(() => _dueDate = d),
-                    ),
+                      DatePickerField(
+                        label: 'Fees due date',
+                        value: _dueDate,
+                        onChanged: (d) => setState(() => _dueDate = d),
+                      ),
+                    ],
                   ],
                 ),
               ),

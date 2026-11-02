@@ -83,25 +83,26 @@ class StudentProfileScreen extends StatelessWidget {
                   _Row('Status', s.disabled ? 'Disabled' : 'Active'),
                 ],
               ),
-              _Section(
-                title: 'Fees',
-                trailing: TextButton(
-                  onPressed: () => showCollectFeeDialog(context, s),
-                  child: const Text('COLLECT'),
-                ),
-                children: [
-                  _Row('Total fees', formatMoney(s.totalFees)),
-                  _Row('Paid', formatMoney(s.feesPaid)),
-                  _Row(
-                    'Due',
-                    formatMoney(s.feesDue),
-                    valueColor: s.feesDue > 0
-                        ? AppColors.danger
-                        : AppColors.success,
+              if (appState.canAccessFees)
+                _Section(
+                  title: 'Fees',
+                  trailing: TextButton(
+                    onPressed: () => showCollectFeeDialog(context, s),
+                    child: const Text('COLLECT'),
                   ),
-                  _Row('Due date', formatDate(s.feesDueDate)),
-                ],
-              ),
+                  children: [
+                    _Row('Total fees', formatMoney(s.totalFees)),
+                    _Row('Paid', formatMoney(s.feesPaid)),
+                    _Row(
+                      'Due',
+                      formatMoney(s.feesDue),
+                      valueColor: s.feesDue > 0
+                          ? AppColors.danger
+                          : AppColors.success,
+                    ),
+                    _Row('Due date', formatDate(s.feesDueDate)),
+                  ],
+                ),
               _Section(
                 title: 'Attendance',
                 children: [

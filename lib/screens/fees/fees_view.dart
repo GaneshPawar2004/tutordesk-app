@@ -60,6 +60,24 @@ class _FeesViewState extends State<FeesView> {
   @override
   Widget build(BuildContext context) {
     final c = widget.schoolClass;
+    if (!appState.canAccessFees) {
+      // The server sends no fee amounts to staff without fee access.
+      return Scaffold(
+        bottomNavigationBar: widget.bottomBar,
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: widget.onBack,
+          ),
+          title: Text('Fees : ${c.name}'),
+        ),
+        body: const EmptyState(
+          icon: Icons.lock_outline,
+          message:
+              'You do not have access to fees.\nAsk the admin to turn on "Can access Fees" for your login.',
+        ),
+      );
+    }
     return Scaffold(
       bottomNavigationBar: widget.bottomBar,
       appBar: AppBar(
