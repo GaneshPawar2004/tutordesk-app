@@ -79,7 +79,9 @@ class FakeApi {
     }
     if (path == '/auth/verify-email') return ok(_session(body['email']));
     if (path == '/auth/login') return ok(_session(body['identifier']));
-    if (path == '/auth/me') return ok({'user': _owner, 'institute': _institute});
+    if (path == '/auth/me') {
+      return ok({'user': _owner, 'institute': _institute});
+    }
     if (path == '/auth/resend-otp' || path == '/auth/forgot-password') {
       return ok({'message': 'sent'});
     }
@@ -244,7 +246,6 @@ class FakeApi {
     // ---- users
     if (path == '/users' && m == 'GET') {
       return ok({
-        'staffLoginLimit': 0,
         'activeCount': users.where((u) => u['active'] == true).length,
         'users': users,
       });
@@ -258,7 +259,7 @@ class FakeApi {
         'salary': null,
         'canAccessFees': false,
         ...body,
-        'active': false, // plan has no free staff logins
+        'active': true, // staff logins are free
       }..remove('password');
       users.add(u);
       return ok({'user': u}, 201);
@@ -268,11 +269,6 @@ class FakeApi {
       if (m == 'DELETE') {
         users.remove(u);
         return noContent;
-      }
-      if (body['active'] == true) {
-        return ok({
-          'error': {'code': 'PLAN_LIMIT', 'message': 'No staff logins left'},
-        }, 403);
       }
       u.addAll(Map<String, dynamic>.from(body)..remove('password'));
       return ok({'user': u});

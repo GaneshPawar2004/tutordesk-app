@@ -23,9 +23,6 @@ class AppState extends ChangeNotifier {
   bool canAccessFees = true;
   int trialDaysRemaining = 0;
 
-  /// Number of staff logins included in the current plan (admin not counted).
-  int staffLoginLimit = 0;
-
   bool get isLoggedIn => api.token != null && userEmail != null;
   bool get isOwner => role == 'owner';
 
@@ -123,7 +120,6 @@ class AppState extends ChangeNotifier {
     role = user['role'] as String? ?? 'owner';
     canAccessFees = user['canAccessFees'] as bool? ?? false;
     trialDaysRemaining = (inst?['trialDaysRemaining'] as num?)?.toInt() ?? 0;
-    staffLoginLimit = (inst?['staffLoginLimit'] as num?)?.toInt() ?? 0;
   }
 
   Future<void> _clearSession() async {
@@ -188,7 +184,6 @@ class AppState extends ChangeNotifier {
       }
       users.clear();
       if (usersRes != null) {
-        staffLoginLimit = (usersRes['staffLoginLimit'] as num).toInt();
         users.addAll([
           for (final u in usersRes['users'] as List) StaffUser.fromJson(u),
         ]);
@@ -530,17 +525,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Returns false when activating would exceed the plan's staff login limit.
-  Future<bool> toggleUserActive(StaffUser u) async {
-    try {
-      final res = await api.patch('/users/${u.id}', {'active': !u.active});
-      _assignUser(u, res['user']);
-      notifyListeners();
-      return true;
-    } on ApiException catch (e) {
-      if (e.code == 'PLAN_LIMIT') return false;
-      rethrow;
-    }
+  /// Blocks an active staff login or unblocks a blocked one.
+  Future<void> toggleUserActive(StaffUser u) async {
+    final res = await api.patch('/users/${u.id}', {'active': !u.active});
+    _assignUser(u, res['user']);
+    notifyListeners();
   }
 
   Future<void> deleteUser(StaffUser u) async {

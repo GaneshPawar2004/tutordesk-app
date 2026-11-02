@@ -238,7 +238,7 @@ void main() {
     await _enter(tester, 'Min 6 characters', 'secret1');
     await _tap(tester, find.text('SAVE USER'));
     await tester.pumpAndSettle();
-    expect(find.text('Blocked'), findsOneWidget);
+    expect(find.text('Active'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
     await tester.pump(const Duration(seconds: 5)); // let snackbar expire

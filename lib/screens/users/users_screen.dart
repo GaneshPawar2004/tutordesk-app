@@ -21,19 +21,8 @@ class UsersScreen extends StatelessWidget {
       );
       if (!ok || !context.mounted) return;
     }
-    final allowed = await runApiValue(
-      context,
-      () => appState.toggleUserActive(u),
-    );
-    if (allowed == null || !context.mounted) return;
-    if (!allowed) {
-      showNotice(
-        context,
-        'Your plan includes ${appState.staffLoginLimit} staff login(s). '
-        'Add staff logins for ₹500/user per year from Subscriptions to '
-        'activate ${u.name}.',
-        title: 'Upgrade required',
-      );
+    if (!await runApi(context, () => appState.toggleUserActive(u)) ||
+        !context.mounted) {
       return;
     }
     showSuccess(
@@ -58,7 +47,6 @@ class UsersScreen extends StatelessWidget {
       body: ListenableBuilder(
         listenable: appState,
         builder: (context, _) {
-          final limit = appState.staffLoginLimit;
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
             children: [
@@ -74,26 +62,18 @@ class UsersScreen extends StatelessWidget {
                       text: '${appState.activeUserCount}',
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    const TextSpan(text: ' of '),
-                    TextSpan(
-                      text: '$limit',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
                     const TextSpan(
                       text:
-                          ' staff logins active — the admin login is always included and not counted here. Only ',
+                          ' staff logins active. Staff logins are free — add as many as you need. Only ',
                     ),
                     const TextSpan(
                       text: 'Active',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    const TextSpan(text: ' staff can sign in. '),
-                    if (limit == 0)
-                      const TextSpan(
-                        text:
-                            'Your plan includes only the admin login — add staff logins for ₹500/user per year from Subscriptions.',
-                        style: TextStyle(color: Color(0xFFD32F2F)),
-                      ),
+                    const TextSpan(
+                      text:
+                          ' staff can sign in; block someone to stop their access.',
+                    ),
                   ],
                 ),
               ),
