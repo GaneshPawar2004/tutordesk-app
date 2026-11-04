@@ -9,7 +9,7 @@ import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../widgets/auth_widgets.dart';
 import '../../widgets/common.dart';
-import '../home/home_shell.dart';
+import '../account/plan_screens.dart';
 import 'reset_password_screen.dart';
 
 enum OtpPurpose { signup, resetPassword }
@@ -159,7 +159,7 @@ class _OtpScreenState extends State<OtpScreen> {
     switch (widget.purpose) {
       case OtpPurpose.signup:
         Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const HomeShell()),
+          MaterialPageRoute(builder: (_) => homeAfterSignIn()),
           (_) => false,
         );
       case OtpPurpose.resetPassword:

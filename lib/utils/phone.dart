@@ -27,6 +27,22 @@ Future<void> openSms(
   if (!ok && context.mounted) showError(context, 'Could not open SMS app.');
 }
 
+/// Opens WhatsApp (or WhatsApp Business) on [number]'s chat with [message]
+/// typed in; the teacher taps send there.
+Future<void> openWhatsApp(
+  BuildContext context,
+  String number,
+  String message,
+) async {
+  var digits = number.replaceAll(RegExp(r'\D'), '');
+  if (digits.length == 10) digits = '91$digits'; // Indian mobile
+  final uri = Uri.parse(
+    'https://wa.me/$digits?text=${Uri.encodeComponent(message)}',
+  );
+  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!ok && context.mounted) showError(context, 'Could not open WhatsApp.');
+}
+
 Future<void> openDialer(BuildContext context, String number) async {
   final ok = await launchUrl(
     Uri(scheme: 'tel', path: number),
@@ -45,8 +61,7 @@ class SimSms {
   /// Asks for the SEND_SMS permission if needed. False if refused.
   static Future<bool> ensurePermission() async {
     if (!supported) return false;
-    final granted =
-        await _channel.invokeMethod<bool>('hasPermission') ?? false;
+    final granted = await _channel.invokeMethod<bool>('hasPermission') ?? false;
     if (granted) return true;
     return await _channel.invokeMethod<bool>('requestPermission') ?? false;
   }
@@ -128,6 +143,7 @@ class _SmsSheetState extends State<_SmsSheet> {
 
   late final _state = List.filled(widget.items.length, _SmsState.idle);
   late final _reason = List<String?>.filled(widget.items.length, null);
+  final _whatsAppOpened = <int>{};
   bool _sendingAll = false;
   bool _closed = false;
 
@@ -209,7 +225,34 @@ class _SmsSheetState extends State<_SmsSheet> {
     }
   }
 
+  static const _whatsAppGreen = Color(0xFF25D366);
+
+  /// WhatsApp button + SMS status/button for row [i].
   Widget _trailing(int i) {
+    final it = widget.items[i];
+    final opened = _whatsAppOpened.contains(i);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'WhatsApp',
+          onPressed: it.number.isEmpty || _sendingAll
+              ? null
+              : () async {
+                  await openWhatsApp(context, it.number, it.message);
+                  if (!_closed) setState(() => _whatsAppOpened.add(i));
+                },
+          icon: Icon(
+            opened ? Icons.mark_chat_read : Icons.chat,
+            color: it.number.isEmpty ? null : _whatsAppGreen,
+          ),
+        ),
+        _smsTrailing(i),
+      ],
+    );
+  }
+
+  Widget _smsTrailing(int i) {
     switch (_state[i]) {
       case _SmsState.sending:
         return const SizedBox(
@@ -254,8 +297,9 @@ class _SmsSheetState extends State<_SmsSheet> {
             padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
             child: Text(
               SimSms.supported
-                  ? 'Messages go from your own SIM (normal SMS charges of your plan).'
-                  : 'Tap SEND to open your SMS app. Messages go from your own SIM.',
+                  ? 'SMS go from your own SIM (normal SMS charges of your plan). '
+                        'Tap the green chat icon to send on WhatsApp instead.'
+                  : 'Tap SEND to open your SMS app, or the green chat icon for WhatsApp.',
               style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
             ),
           ),

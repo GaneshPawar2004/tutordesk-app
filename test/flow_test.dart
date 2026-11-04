@@ -208,6 +208,10 @@ void main() {
     await _enter(tester, 'Enter amount', '5000');
     await _tap(tester, find.text('COLLECT'));
     await tester.pumpAndSettle();
+    // Offer to send a receipt to the parent; skip it here.
+    expect(find.text('Send receipt?'), findsOneWidget);
+    await _tap(tester, find.text('CANCEL'));
+    await tester.pumpAndSettle();
     expect(find.text('₹25000'), findsOneWidget);
 
     // Back to dashboard → Users

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -11,6 +13,7 @@ import 'models.dart';
 class AppState extends ChangeNotifier {
   AppState._() {
     api.onUnauthorized = _expireSession;
+    api.onAccessDenied = _denyAccess;
   }
   static final AppState instance = AppState._();
 
@@ -22,6 +25,15 @@ class AppState extends ChangeNotifier {
   String role = 'owner';
   bool canAccessFees = true;
   int trialDaysRemaining = 0;
+  String instituteName = '';
+
+  // Access of the whole institute (trial / allowed from the admin page / blocked).
+  String accessStatus = 'trial';
+  bool accessAllowed = true;
+  DateTime? accessUntil;
+  String accessMessage = '';
+  String supportPhone = '';
+  String supportEmail = '';
 
   bool get isLoggedIn => api.token != null && userEmail != null;
   bool get isOwner => role == 'owner';
@@ -30,9 +42,13 @@ class AppState extends ChangeNotifier {
   /// login blocked); the app shows the login screen.
   VoidCallback? onSessionExpired;
 
+  /// Called when the institute's trial/plan has ended or it was blocked; the
+  /// app shows the access screen.
+  VoidCallback? onAccessDenied;
+
   /// Restores the saved login on app start. Returns false if there is none
   /// or it is no longer valid; throws [ApiException] if the server can't be
-  /// reached.
+  /// reached. Check [accessAllowed] afterwards.
   Future<bool> restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString(_tokenKey);
@@ -41,7 +57,7 @@ class AppState extends ChangeNotifier {
     try {
       final me = await api.get('/auth/me');
       _applySession(me);
-      await loadAll();
+      if (accessAllowed) await loadAll();
       return true;
     } on ApiException catch (e) {
       if (e.status == 401 || e.status == 403) {
@@ -109,7 +125,7 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_tokenKey, api.token!);
     _applySession(res);
-    await loadAll();
+    if (accessAllowed) await loadAll();
   }
 
   void _applySession(dynamic res) {
@@ -119,7 +135,65 @@ class AppState extends ChangeNotifier {
     userEmail = user['email'] as String?;
     role = user['role'] as String? ?? 'owner';
     canAccessFees = user['canAccessFees'] as bool? ?? false;
-    trialDaysRemaining = (inst?['trialDaysRemaining'] as num?)?.toInt() ?? 0;
+    if (inst != null) _applyInstitute(inst);
+  }
+
+  void _applyInstitute(Map<String, dynamic> inst) {
+    instituteName = inst['name'] as String? ?? '';
+    trialDaysRemaining = (inst['trialDaysRemaining'] as num?)?.toInt() ?? 0;
+    final access = inst['access'] as Map<String, dynamic>? ?? const {};
+    accessStatus = access['status'] as String? ?? 'trial';
+    accessAllowed = access['allowed'] as bool? ?? true;
+    accessUntil = parseDate(access['accessUntil']);
+    accessMessage = access['message'] as String? ?? '';
+    final support = inst['support'] as Map<String, dynamic>? ?? const {};
+    supportPhone = support['phone'] as String? ?? '';
+    supportEmail = support['email'] as String? ?? '';
+  }
+
+  /// Asks the server again (e.g. after the admin allowed this tuition).
+  /// Loads everything when access is allowed.
+  Future<void> recheckAccess() async {
+    _applySession(await api.get('/auth/me'));
+    if (accessAllowed) await loadAll();
+    notifyListeners();
+  }
+
+  void _denyAccess(String message) {
+    if (!isLoggedIn) return;
+    final wasAllowed = accessAllowed;
+    accessAllowed = false;
+    accessMessage = message;
+    notifyListeners();
+    if (wasAllowed) onAccessDenied?.call();
+  }
+
+  // ---- My profile ----------------------------------------------------------
+  /// [instituteName] only for the owner.
+  Future<void> updateProfile({String? name, String? instituteName}) async {
+    final res = await api.patch('/account', {
+      'name': ?name,
+      'instituteName': ?instituteName,
+    });
+    _applySession(res);
+    notifyListeners();
+  }
+
+  /// Changes the password; other devices are signed out, this one stays in.
+  Future<void> changePassword(String current, String next) async {
+    final res = await api.post('/account/password', {
+      'currentPassword': current,
+      'newPassword': next,
+    });
+    api.token = res['token'] as String;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, api.token!);
+  }
+
+  /// Owner only: deletes the institute with all its data, then signs out.
+  Future<void> deleteAccount(String password) async {
+    await api.deleteWithBody('/account', {'password': password});
+    await logout();
   }
 
   Future<void> _clearSession() async {
@@ -131,6 +205,8 @@ class AppState extends ChangeNotifier {
     tests.clear();
     users.clear();
     presentToday = 0;
+    accessAllowed = true;
+    accessMessage = '';
     _invalidateAttendance();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
@@ -321,6 +397,51 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- Student photos & payments -------------------------------------------
+  /// Photo address (changes when the photo changes), or null without photo.
+  String? photoUrl(Student s) => s.photoUpdatedAt == null
+      ? null
+      : '$apiBaseUrl/students/${s.id}/photo?v=${s.photoUpdatedAt!.millisecondsSinceEpoch}';
+
+  Map<String, String> get authHeaders => {
+    if (api.token != null) 'Authorization': 'Bearer ${api.token}',
+  };
+
+  /// [jpegBytes]: an already-shrunk photo (the picker resizes it).
+  Future<void> uploadStudentPhoto(Student s, List<int> jpegBytes) async {
+    final res = await api.put('/students/${s.id}/photo', {
+      'image': base64Encode(jpegBytes),
+    });
+    _assignStudent(s, res['student']);
+    notifyListeners();
+  }
+
+  Future<void> removeStudentPhoto(Student s) async {
+    final res = await api.delete('/students/${s.id}/photo');
+    _assignStudent(s, res['student']);
+    notifyListeners();
+  }
+
+  /// Fee payments of a student, newest first.
+  Future<List<FeePayment>> loadPayments(Student s) async {
+    final res = await api.get('/students/${s.id}/fees/payments');
+    return [for (final p in res['payments'] as List) FeePayment.fromJson(p)];
+  }
+
+  /// Active students whose birthday is today.
+  List<Student> get birthdaysToday {
+    final now = DateTime.now();
+    return students
+        .where(
+          (s) =>
+              !s.disabled &&
+              s.dateOfBirth != null &&
+              s.dateOfBirth!.month == now.month &&
+              s.dateOfBirth!.day == now.day,
+        )
+        .toList();
+  }
+
   /// Copies server values into the existing object so screens holding it
   /// see the change.
   void _assignStudent(Student s, Map<String, dynamic> json) {
@@ -333,7 +454,8 @@ class AppState extends ChangeNotifier {
       ..rollNo = f.rollNo
       ..email = f.email
       ..dateOfBirth = f.dateOfBirth
-      ..disabled = f.disabled;
+      ..disabled = f.disabled
+      ..photoUpdatedAt = f.photoUpdatedAt;
     if (json.containsKey('totalFees')) {
       s
         ..totalFees = f.totalFees

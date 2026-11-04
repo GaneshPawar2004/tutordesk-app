@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../data/app_state.dart';
@@ -5,6 +7,7 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../widgets/common.dart';
+import 'student_photo.dart';
 
 /// Add / edit student dialog (screens 11-13). Returns true when saved.
 Future<bool?> showStudentFormDialog(
@@ -49,6 +52,14 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
 
   bool get _isEdit => widget.student != null;
 
+  /// Photo picked in this form, uploaded on save.
+  List<int>? _newPhoto;
+
+  Future<void> _pickPhoto() async {
+    final bytes = await pickStudentPhoto(context);
+    if (bytes != null && mounted) setState(() => _newPhoto = bytes);
+  }
+
   static String _plain(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
@@ -79,12 +90,17 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
       totalFees: double.tryParse(_fees.text.trim()) ?? 0,
       feesDueDate: _dueDate,
     );
-    final ok = await runApi(
-      context,
-      () => _isEdit
-          ? appState.updateStudent(widget.student!, body)
-          : appState.addStudent(widget.schoolClass.id, body),
-    );
+    final photo = _newPhoto;
+    final ok = await runApi(context, () async {
+      final Student s;
+      if (_isEdit) {
+        s = widget.student!;
+        await appState.updateStudent(s, body);
+      } else {
+        s = await appState.addStudent(widget.schoolClass.id, body);
+      }
+      if (photo != null) await appState.uploadStudentPhoto(s, photo);
+    });
     if (ok && mounted) Navigator.of(context).pop(true);
   }
 
@@ -126,9 +142,17 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
                   children: [
                     Center(
                       child: _PhotoPicker(
-                        onTap: () {
-                          showComingSoon(context, 'Photo upload');
-                        },
+                        onTap: _pickPhoto,
+                        image: _newPhoto != null
+                            ? CircleAvatar(
+                                radius: 52,
+                                backgroundImage: MemoryImage(
+                                  Uint8List.fromList(_newPhoto!),
+                                ),
+                              )
+                            : widget.student?.photoUpdatedAt != null
+                            ? StudentPhoto(student: widget.student, radius: 52)
+                            : null,
                       ),
                     ),
                     const SizedBox(height: 18),
@@ -245,8 +269,11 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
 }
 
 class _PhotoPicker extends StatelessWidget {
-  const _PhotoPicker({required this.onTap});
+  const _PhotoPicker({required this.onTap, this.image});
   final VoidCallback onTap;
+
+  /// Current/picked photo; a placeholder when null.
+  final Widget? image;
 
   @override
   Widget build(BuildContext context) {
@@ -257,15 +284,16 @@ class _PhotoPicker extends StatelessWidget {
         height: 105,
         child: Stack(
           children: [
-            const CircleAvatar(
-              radius: 52,
-              backgroundColor: Color(0xFFF2F2F2),
-              child: Icon(
-                Icons.person_outline,
-                size: 45,
-                color: AppColors.textMuted,
-              ),
-            ),
+            image ??
+                const CircleAvatar(
+                  radius: 52,
+                  backgroundColor: Color(0xFFF2F2F2),
+                  child: Icon(
+                    Icons.person_outline,
+                    size: 45,
+                    color: AppColors.textMuted,
+                  ),
+                ),
             Positioned(
               right: 0,
               bottom: 0,

@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/export.dart';
 import '../../utils/phone.dart';
 import '../../widgets/common.dart';
 import '../classes/class_detail_screen.dart';
 import '../fees/collect_fee_dialog.dart';
 import 'student_form_dialog.dart';
+import 'student_photo.dart';
 import 'student_profile_screen.dart';
 import 'students_view.dart';
 
@@ -98,7 +100,7 @@ Future<void> showStudentActionsDialog(
           'View Photo',
           const Color(0xFF00796B),
           const Color(0xFFE0F2F1),
-          () => run(() => showComingSoon(context, 'Student photos')),
+          () => run(() => showStudentPhotoDialog(context, s)),
         ),
         _Action(
           Icons.trending_up,
@@ -112,7 +114,7 @@ Future<void> showStudentActionsDialog(
           'Export',
           const Color(0xFFE65100),
           const Color(0xFFFFF3E0),
-          () => run(() => showComingSoon(context, 'Export')),
+          () => run(() => exportStudent(context, s)),
         ),
         _Action(
           s.disabled ? Icons.check_circle_outline : Icons.block,
@@ -175,7 +177,7 @@ Future<void> showStudentActionsDialog(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                StudentAvatar(radius: 34, disabled: s.disabled),
+                StudentAvatar(radius: 34, disabled: s.disabled, student: s),
                 const SizedBox(height: 10),
                 Text(
                   s.name,

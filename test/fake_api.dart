@@ -41,11 +41,22 @@ class FakeApi {
     return {'token': 'token-$email', 'user': _owner, 'institute': _institute};
   }
 
+  /// False: the trial has ended (data routes answer 403 ACCESS_EXPIRED).
+  bool accessAllowed = true;
+
   Map<String, dynamic> get _institute => {
     'id': 'inst',
     'name': 'Institute',
-    'trialDaysRemaining': 14,
-    'staffLoginLimit': 0,
+    'trialDaysRemaining': accessAllowed ? 14 : 0,
+    'access': {
+      'status': 'trial',
+      'allowed': accessAllowed,
+      if (!accessAllowed) ...{
+        'code': 'ACCESS_EXPIRED',
+        'message': 'Your free trial has ended.',
+      },
+    },
+    'support': {'phone': '', 'email': 'support@example.com'},
   };
 
   Map<String, dynamic> _student(Map<String, dynamic> s) {
@@ -72,6 +83,15 @@ class FakeApi {
       headers: {'content-type': 'application/json; charset=utf-8'},
     );
     final noContent = http.Response('', 204);
+
+    if (!accessAllowed && !path.startsWith('/auth/')) {
+      return ok({
+        'error': {
+          'code': 'ACCESS_EXPIRED',
+          'message': 'Your free trial has ended.',
+        },
+      }, 403);
+    }
 
     // ---- auth
     if (path == '/auth/register' && m == 'POST') {

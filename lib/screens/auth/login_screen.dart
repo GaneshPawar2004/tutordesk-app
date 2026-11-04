@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/api.dart';
 import '../../data/app_state.dart';
@@ -6,7 +7,7 @@ import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../widgets/auth_widgets.dart';
 import '../../widgets/common.dart';
-import '../home/home_shell.dart';
+import '../account/plan_screens.dart';
 import 'forgot_password_screen.dart';
 import 'otp_screen.dart';
 import 'signup_screen.dart';
@@ -56,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     setState(() => _loading = false);
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const HomeShell()),
+      MaterialPageRoute(builder: (_) => homeAfterSignIn()),
       (_) => false,
     );
   }
@@ -133,12 +134,12 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               _FooterLink(
                 'Privacy Policy',
-                onTap: () => showComingSoon(context, 'Privacy Policy'),
+                onTap: () => _openPage(context, 'privacy'),
               ),
               const Text(' · ', style: TextStyle(color: AppColors.textMuted)),
               _FooterLink(
                 'Terms & Conditions',
-                onTap: () => showComingSoon(context, 'Terms & Conditions'),
+                onTap: () => _openPage(context, 'terms'),
               ),
             ],
           ),
@@ -151,6 +152,15 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+/// Opens the privacy policy / terms page on the Kaksha website.
+Future<void> _openPage(BuildContext context, String page) async {
+  final ok = await launchUrl(
+    Uri.parse('$siteBaseUrl/$page'),
+    mode: LaunchMode.externalApplication,
+  );
+  if (!ok && context.mounted) showError(context, 'Could not open the page.');
 }
 
 class _FooterLink extends StatelessWidget {

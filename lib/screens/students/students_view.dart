@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/export.dart';
 import '../../widgets/common.dart';
 import '../classes/class_detail_screen.dart';
 import 'student_actions_dialog.dart';
 import 'student_form_dialog.dart';
+import 'student_photo.dart';
 
 enum _SortBy { roll, name }
 
@@ -72,6 +74,11 @@ class _StudentsViewState extends State<StudentsView> {
               icon: const Icon(Icons.search, size: 21),
               onPressed: () => setState(() => _searching = true),
             ),
+          IconButton(
+            tooltip: 'Export to Excel',
+            icon: const Icon(Icons.file_download_outlined, size: 22),
+            onPressed: () => exportClass(context, c),
+          ),
           PopupMenuButton<_SortBy>(
             onSelected: (v) => setState(() => _sortBy = v),
             itemBuilder: (_) => [
@@ -162,7 +169,7 @@ class _StudentTile extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                StudentAvatar(radius: 24, disabled: s.disabled),
+                StudentAvatar(radius: 24, disabled: s.disabled, student: s),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -202,23 +209,25 @@ class _StudentTile extends StatelessWidget {
 }
 
 class StudentAvatar extends StatelessWidget {
-  const StudentAvatar({super.key, this.radius = 32, this.disabled = false});
+  const StudentAvatar({
+    super.key,
+    this.radius = 32,
+    this.disabled = false,
+    this.student,
+  });
 
   final double radius;
   final bool disabled;
 
+  /// Shows this student's photo when they have one.
+  final Student? student;
+
   @override
-  Widget build(BuildContext context) {
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: disabled ? Colors.grey : AppColors.primary,
-      child: Icon(
-        Icons.person_outline,
-        color: Colors.white,
-        size: radius * 0.95,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => StudentPhoto(
+    student: student,
+    radius: radius,
+    background: disabled ? Colors.grey : AppColors.primary,
+  );
 }
 
 class StatusBadge extends StatelessWidget {

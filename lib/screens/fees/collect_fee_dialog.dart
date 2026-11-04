@@ -4,6 +4,7 @@ import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
+import '../../utils/phone.dart';
 import '../../widgets/common.dart';
 
 /// Records a fee payment for a student.
@@ -114,6 +115,51 @@ Future<void> showCollectFeeDialog(BuildContext context, Student s) async {
     if (await runApi(context, () => appState.collectFee(s, amount)) &&
         context.mounted) {
       showSuccess(context, '${formatMoney(amount)} collected from ${s.name}');
+      final send = await confirmDialog(
+        context,
+        title: 'Send receipt?',
+        message:
+            'Send a payment receipt for ${formatMoney(amount)} to the parent of ${s.name} by SMS or WhatsApp?',
+        confirmLabel: 'SEND',
+        confirmColor: AppColors.primary,
+      );
+      if (send && context.mounted) {
+        sendReceipt(context, s, amount: amount, paidAt: DateTime.now());
+      }
     }
   }
+}
+
+/// Text of a fee receipt for a payment of [amount] by [s].
+String receiptText(
+  Student s, {
+  required double amount,
+  required DateTime paidAt,
+}) {
+  final c = appState.classById(s.classId)?.name ?? '';
+  final inst = appState.instituteName;
+  return 'Fee receipt: received ${formatMoney(amount)} for ${s.name}'
+      '${c.isEmpty ? '' : ' ($c)'} on ${formatDate(paidAt)}. '
+      'Total paid ${formatMoney(s.feesPaid)} of ${formatMoney(s.totalFees)}, '
+      'balance ${formatMoney(s.feesDue)}. Thank you. - ${inst.isEmpty ? 'Kaksha' : inst}';
+}
+
+/// Opens the SMS/WhatsApp sheet with the receipt for the parent.
+void sendReceipt(
+  BuildContext context,
+  Student s, {
+  required double amount,
+  required DateTime paidAt,
+}) {
+  showSmsSheet(
+    context,
+    title: 'Fee receipt',
+    items: [
+      SmsItem(
+        name: s.name,
+        number: parentNumber(s),
+        message: receiptText(s, amount: amount, paidAt: paidAt),
+      ),
+    ],
+  );
 }

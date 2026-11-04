@@ -4,8 +4,11 @@ import '../../data/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../widgets/common.dart';
+import '../account/plan_screens.dart';
+import '../account/profile_screen.dart';
 import '../auth/login_screen.dart';
 import '../fees/fee_dues_screen.dart';
+import 'notifications_screen.dart';
 import '../reports/reports_screen.dart';
 import '../users/users_screen.dart';
 
@@ -39,22 +42,28 @@ class DashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Dashboard'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none, size: 24),
-            onPressed: () => showInfo(context, 'No new notifications'),
+          ListenableBuilder(
+            listenable: appState,
+            builder: (context, _) {
+              final count = appNotices().length;
+              return IconButton(
+                icon: Badge(
+                  isLabelVisible: count > 0,
+                  label: Text('$count'),
+                  child: const Icon(Icons.notifications_none, size: 24),
+                ),
+                onPressed: () => _push(context, const NotificationsScreen()),
+              );
+            },
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (v) {
               switch (v) {
                 case 'profile':
-                  showInfo(
-                    context,
-                    'Signed in as ${appState.userName ?? ''} '
-                    '(${appState.userEmail ?? 'unknown'})',
-                  );
+                  _push(context, const ProfileScreen());
                 case 'subscription':
-                  showComingSoon(context, 'Subscriptions');
+                  _push(context, const SubscriptionScreen());
                 case 'logout':
                   _logout(context);
               }
@@ -84,8 +93,16 @@ class DashboardScreen extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(12),
             children: [
-              _TrialBanner(days: appState.trialDaysRemaining),
-              const SizedBox(height: 12),
+              if (appState.accessStatus == 'trial')
+                InkWell(
+                  onTap: () => _push(context, const SubscriptionScreen()),
+                  child: _TrialBanner(days: appState.trialDaysRemaining),
+                ),
+              if (appState.accessStatus == 'trial') const SizedBox(height: 12),
+              if (appState.birthdaysToday.isNotEmpty) ...[
+                _BirthdayCard(onTap: () => showBirthdayWishes(context)),
+                const SizedBox(height: 12),
+              ],
               GridView.count(
                 crossAxisCount: 2,
                 shrinkWrap: true,
@@ -324,6 +341,29 @@ class _QuickAction extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _BirthdayCard extends StatelessWidget {
+  const _BirthdayCard({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = appState.birthdaysToday.map((s) => s.name).join(', ');
+    return Card(
+      color: const Color(0xFFFCE4EC),
+      child: ListTile(
+        leading: const Icon(Icons.cake_outlined, color: Color(0xFFE91E63)),
+        title: Text(
+          'Birthday today: $names',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: const Text('Tap to send wishes by SMS or WhatsApp'),
+        trailing: const Icon(Icons.send, color: Color(0xFFE91E63)),
+        onTap: onTap,
       ),
     );
   }

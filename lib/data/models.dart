@@ -29,6 +29,7 @@ class Student {
     this.feesDueDate,
     this.feesPaid = 0,
     this.disabled = false,
+    this.photoUpdatedAt,
   });
 
   /// Fee fields are missing for staff without fee access; they read as 0.
@@ -46,6 +47,7 @@ class Student {
     feesDueDate: parseDate(j['feesDueDate']),
     feesPaid: _num(j['feesPaid']),
     disabled: j['disabled'] as bool? ?? false,
+    photoUpdatedAt: parseDate(j['photoUpdatedAt']),
   );
 
   final String id;
@@ -62,9 +64,37 @@ class Student {
   double feesPaid;
   bool disabled;
 
+  /// Null when the student has no photo.
+  DateTime? photoUpdatedAt;
+
   double get feesDue => (totalFees - feesPaid).clamp(0, double.infinity);
 
   int get rollNumber => int.tryParse(rollNo) ?? 1 << 30;
+}
+
+/// One fee payment collected from a student.
+class FeePayment {
+  FeePayment({
+    required this.id,
+    required this.amount,
+    required this.paidAt,
+    this.note = '',
+    this.collectedBy = '',
+  });
+
+  factory FeePayment.fromJson(Map<String, dynamic> j) => FeePayment(
+    id: j['id'] as String,
+    amount: _num(j['amount']),
+    paidAt: parseDate(j['paidAt']) ?? DateTime.now(),
+    note: j['note'] as String? ?? '',
+    collectedBy: j['collectedBy'] as String? ?? '',
+  );
+
+  final String id;
+  final double amount;
+  final DateTime paidAt;
+  final String note;
+  final String collectedBy;
 }
 
 class StaffUser {

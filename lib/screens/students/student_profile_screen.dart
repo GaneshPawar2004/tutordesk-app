@@ -51,7 +51,13 @@ class StudentProfileScreen extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              Center(child: StudentAvatar(radius: 36, disabled: s.disabled)),
+              Center(
+                child: StudentAvatar(
+                  radius: 36,
+                  disabled: s.disabled,
+                  student: s,
+                ),
+              ),
               const SizedBox(height: 9),
               Center(
                 child: Text(
@@ -101,6 +107,8 @@ class StudentProfileScreen extends StatelessWidget {
                           : AppColors.success,
                     ),
                     _Row('Due date', formatDate(s.feesDueDate)),
+                    // Reloads whenever a payment changes feesPaid.
+                    _PaymentHistory(key: ValueKey(s.feesPaid), student: s),
                   ],
                 ),
               _Section(
@@ -232,6 +240,82 @@ class _Row extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Past fee payments of a student, each with a "send receipt" button.
+class _PaymentHistory extends StatefulWidget {
+  const _PaymentHistory({super.key, required this.student});
+  final Student student;
+
+  @override
+  State<_PaymentHistory> createState() => _PaymentHistoryState();
+}
+
+class _PaymentHistoryState extends State<_PaymentHistory> {
+  late final Future<List<FeePayment>> _payments = appState.loadPayments(
+    widget.student,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<FeePayment>>(
+      future: _payments,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: LinearProgressIndicator(),
+          );
+        }
+        final list = snap.data ?? const <FeePayment>[];
+        if (snap.hasError || list.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              snap.hasError
+                  ? 'Could not load payment history.'
+                  : 'No payments yet.',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 10, bottom: 2),
+              child: Text(
+                'Payment history',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            for (final p in list)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${formatDate(p.paidAt)}  ·  ${formatMoney(p.amount)}'
+                      '${p.collectedBy.isEmpty ? '' : '  ·  ${p.collectedBy}'}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Send receipt',
+                    icon: const Icon(Icons.receipt_long_outlined, size: 20),
+                    onPressed: () => sendReceipt(
+                      context,
+                      widget.student,
+                      amount: p.amount,
+                      paidAt: p.paidAt,
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        );
+      },
     );
   }
 }

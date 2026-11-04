@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'data/app_state.dart';
 import 'screens/auth/login_screen.dart';
-import 'screens/home/home_shell.dart';
+import 'screens/account/plan_screens.dart';
 import 'theme/app_theme.dart';
 import 'widgets/auth_widgets.dart';
 
@@ -28,6 +28,13 @@ void main() {
         ),
       );
     }
+  };
+  // Trial/plan ended (or blocked) while using the app.
+  appState.onAccessDenied = () {
+    navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AccessScreen()),
+      (_) => false,
+    );
   };
   runApp(const TeachersApp());
 }
@@ -85,7 +92,7 @@ class _StartupScreenState extends State<StartupScreen> {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (_) => signedIn ? const HomeShell() : const LoginScreen(),
+          builder: (_) => signedIn ? homeAfterSignIn() : const LoginScreen(),
         ),
       );
     } catch (e) {

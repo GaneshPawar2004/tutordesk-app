@@ -11,6 +11,9 @@ const apiBaseUrl = String.fromEnvironment(
   defaultValue: 'https://tutordesk-backend.onrender.com/api/v1',
 );
 
+/// The server's web address (privacy policy, terms), e.g. https://….onrender.com
+final siteBaseUrl = apiBaseUrl.replaceFirst(RegExp(r'/api/v1/?$'), '');
+
 /// Error returned by the API (or a network failure), with a message that can
 /// be shown to the user as-is.
 class ApiException implements Exception {
@@ -35,6 +38,10 @@ class Api {
   /// Called when the server rejects the token (expired or signed out elsewhere).
   void Function()? onUnauthorized;
 
+  /// Called with the server's message when the institute's trial/plan ended
+  /// or it was blocked (403 ACCESS_EXPIRED / ACCESS_BLOCKED).
+  void Function(String message)? onAccessDenied;
+
   /// Replaceable in tests (e.g. with `MockClient` from package:http/testing).
   http.Client client = http.Client();
 
@@ -50,6 +57,8 @@ class Api {
   Future<dynamic> patch(String path, [Object? body]) =>
       _send('PATCH', path, body: body);
   Future<dynamic> delete(String path) => _send('DELETE', path);
+  Future<dynamic> deleteWithBody(String path, Object body) =>
+      _send('DELETE', path, body: body);
 
   Future<dynamic> _send(
     String method,
@@ -91,6 +100,9 @@ class Api {
     // request means the session is over.
     if (res.statusCode == 401 && code == 'UNAUTHORIZED' && token != null) {
       onUnauthorized?.call();
+    }
+    if (code == 'ACCESS_EXPIRED' || code == 'ACCESS_BLOCKED') {
+      onAccessDenied?.call(message);
     }
     throw ApiException(message, code: code, status: res.statusCode);
   }
