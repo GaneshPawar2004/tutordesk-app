@@ -23,6 +23,7 @@ class FakeApi {
   final students = <Map<String, dynamic>>[];
   final tests = <Map<String, dynamic>>[];
   final users = <Map<String, dynamic>>[];
+  final smsBatches = <Map<String, dynamic>>[];
 
   /// classId|date -> [{student, status}]
   final attendance = <String, List<Map<String, dynamic>>>{};
@@ -261,6 +262,59 @@ class FakeApi {
         ..['maxMarks'] = body['maxMarks']
         ..['marks'] = body['marks'];
       return ok({'test': _test(t)});
+    }
+
+    // ---- SMS queue (records lists; sending itself happens on the phone)
+    if (path == '/sms/batches' && m == 'GET') {
+      return ok({
+        'batches': [
+          for (final b in smsBatches.reversed)
+            {
+              ...b,
+              'total': (b['messages'] as List).length,
+              'sent': (b['messages'] as List)
+                  .where((x) => x['status'] == 'sent')
+                  .length,
+              'remaining': (b['messages'] as List)
+                  .where((x) => x['status'] != 'sent')
+                  .length,
+            },
+        ],
+      });
+    }
+    if (path == '/sms/batches' && m == 'POST') {
+      final msgs = [
+        for (final x in body['messages'] as List)
+          {...Map<String, dynamic>.from(x), 'id': _id(), 'status': 'pending'},
+      ];
+      final b = {
+        'id': _id(),
+        'title': body['title'],
+        'kind': body['kind'],
+        'createdAt': _now,
+        'messages': msgs,
+      };
+      smsBatches.add(b);
+      return ok({'batch': b['id'], 'messages': msgs}, 201);
+    }
+    if (path == '/sms/release') return noContent;
+    if (seg.length == 3 &&
+        seg[0] == 'sms' &&
+        seg[1] == 'batches' &&
+        m == 'GET') {
+      final b = smsBatches.firstWhere((x) => x['id'] == seg[2]);
+      return ok({
+        'batch': {'id': b['id'], 'title': b['title'], 'kind': b['kind']},
+        'messages': b['messages'],
+      });
+    }
+    if (seg.length == 3 && seg[0] == 'sms' && seg[2] == 'report') {
+      for (final b in smsBatches) {
+        for (final x in b['messages'] as List) {
+          if (x['id'] == seg[1]) x['status'] = body['status'];
+        }
+      }
+      return ok({'message': {}});
     }
 
     // ---- users

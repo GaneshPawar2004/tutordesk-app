@@ -8,6 +8,7 @@ import '../account/plan_screens.dart';
 import '../account/profile_screen.dart';
 import '../auth/login_screen.dart';
 import '../fees/fee_dues_screen.dart';
+import '../sms/pending_sms_screen.dart';
 import 'notifications_screen.dart';
 import '../reports/reports_screen.dart';
 import '../users/users_screen.dart';
@@ -62,6 +63,8 @@ class DashboardScreen extends StatelessWidget {
               switch (v) {
                 case 'profile':
                   _push(context, const ProfileScreen());
+                case 'sms':
+                  _push(context, const PendingSmsScreen());
                 case 'subscription':
                   _push(context, const SubscriptionScreen());
                 case 'logout':
@@ -70,6 +73,7 @@ class DashboardScreen extends StatelessWidget {
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'profile', child: Text('My Profile')),
+              PopupMenuItem(value: 'sms', child: Text('Pending SMS')),
               PopupMenuItem(
                 value: 'subscription',
                 child: Text('Subscriptions'),
@@ -99,6 +103,27 @@ class DashboardScreen extends StatelessWidget {
                   child: _TrialBanner(days: appState.trialDaysRemaining),
                 ),
               if (appState.accessStatus == 'trial') const SizedBox(height: 12),
+              if (appState.pendingSms > 0) ...[
+                Card(
+                  color: const Color(0xFFFFEBEE),
+                  child: ListTile(
+                    leading: const Icon(
+                      Icons.sms_failed_outlined,
+                      color: AppColors.danger,
+                    ),
+                    title: Text(
+                      '${appState.pendingSms} parent SMS not sent yet',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'Tap to see who is left and send from your phone',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _push(context, const PendingSmsScreen()),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               if (appState.birthdaysToday.isNotEmpty) ...[
                 _BirthdayCard(onTap: () => showBirthdayWishes(context)),
                 const SizedBox(height: 12),

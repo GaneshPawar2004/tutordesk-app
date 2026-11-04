@@ -204,6 +204,7 @@ class AppState extends ChangeNotifier {
     students.clear();
     tests.clear();
     users.clear();
+    smsBatches.clear();
     presentToday = 0;
     accessAllowed = true;
     accessMessage = '';
@@ -265,7 +266,7 @@ class AppState extends ChangeNotifier {
         ]);
       }
       _invalidateAttendance();
-      await refreshDashboard();
+      await Future.wait([refreshDashboard(), refreshSmsBatches()]);
     } finally {
       loading = false;
       notifyListeners();
@@ -395,6 +396,81 @@ class AppState extends ChangeNotifier {
     });
     _assignStudent(s, res['student']);
     notifyListeners();
+  }
+
+  // ---- Parent SMS queue ------------------------------------------------------
+  /// SMS lists of the last 7 days (newest first).
+  final List<SmsBatch> smsBatches = [];
+
+  /// Unsent parent SMS any phone can still send.
+  int get pendingSms => smsBatches.fold(0, (n, b) => n + b.remaining);
+
+  Future<void> refreshSmsBatches() async {
+    final res = await api.get('/sms/batches');
+    smsBatches
+      ..clear()
+      ..addAll([for (final b in res['batches'] as List) SmsBatch.fromJson(b)]);
+    notifyListeners();
+  }
+
+  /// Saves a "send to all" list; returns the batch id and its message ids in
+  /// the same order as [messages].
+  Future<(String, List<String>)> createSmsBatch({
+    required String kind,
+    required String title,
+    String? classId,
+    required List<Map<String, dynamic>> messages,
+  }) async {
+    final res = await api.post('/sms/batches', {
+      'kind': kind,
+      'title': title,
+      'classId': ?classId,
+      'messages': messages,
+    });
+    return (
+      res['batch'] as String,
+      [for (final m in res['messages'] as List) m['id'] as String],
+    );
+  }
+
+  /// Reserves unsent messages for this phone (10 minutes).
+  Future<List<SmsMessage>> claimSms({
+    String? batch,
+    List<String>? ids,
+    required int limit,
+  }) async {
+    final res = await api.post('/sms/claim', {
+      'batch': ?batch,
+      'ids': ?ids,
+      'limit': limit,
+    });
+    return [for (final m in res['messages'] as List) SmsMessage.fromJson(m)];
+  }
+
+  /// [channel]: sms (from SIM), whatsapp, sms_app (phone's SMS app).
+  Future<void> reportSms(
+    String id, {
+    required bool sent,
+    String? reason,
+    String channel = 'sms',
+  }) => api.post('/sms/$id/report', {
+    'status': sent ? 'sent' : 'failed',
+    'reason': ?reason,
+    'channel': channel,
+  });
+
+  Future<void> releaseSms(List<String> ids) async {
+    if (ids.isNotEmpty) await api.post('/sms/release', {'ids': ids});
+  }
+
+  Future<List<SmsMessage>> loadSmsBatch(String id) async {
+    final res = await api.get('/sms/batches/$id');
+    return [for (final m in res['messages'] as List) SmsMessage.fromJson(m)];
+  }
+
+  Future<void> dismissSmsBatch(String id) async {
+    await api.post('/sms/batches/$id/dismiss');
+    await refreshSmsBatches();
   }
 
   // ---- Student photos & payments -------------------------------------------

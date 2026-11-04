@@ -19,6 +19,7 @@ Future<void> showMarksSms(BuildContext context, ClassTest test) {
     final remarks = (m?.remarks ?? '').isEmpty ? '' : ' Remarks: ${m!.remarks}';
     items.add(
       SmsItem(
+        studentId: s.id,
         name: s.name,
         number: parentNumber(s),
         message: marks == null
@@ -32,6 +33,9 @@ Future<void> showMarksSms(BuildContext context, ClassTest test) {
   return showSmsSheet(
     context,
     title: 'SMS marks — ${test.subject}',
+    kind: 'marks',
+    listTitle: '$className · Marks: ${test.subject}',
+    classId: test.classId,
     items: items,
   );
 }

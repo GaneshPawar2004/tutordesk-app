@@ -106,9 +106,13 @@ class _AttendanceViewState extends State<AttendanceView> {
     showSmsSheet(
       context,
       title: 'SMS absent parents (${absent.length})',
+      kind: 'absent',
+      listTitle: '${widget.schoolClass.name} · Absent on ${formatDate(_date)}',
+      classId: widget.schoolClass.id,
       items: [
         for (final s in absent)
           SmsItem(
+            studentId: s.id,
             name: s.name,
             number: parentNumber(s),
             message:

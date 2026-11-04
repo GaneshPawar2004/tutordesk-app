@@ -7,6 +7,7 @@ import '../../utils/phone.dart';
 import '../../widgets/common.dart';
 import '../account/plan_screens.dart';
 import '../fees/fee_dues_screen.dart';
+import '../sms/pending_sms_screen.dart';
 
 /// Something the teacher should look at, built from the loaded data.
 class AppNotice {
@@ -34,9 +35,12 @@ void showBirthdayWishes(BuildContext context) {
   showSmsSheet(
     context,
     title: 'Birthday wishes (${appState.birthdaysToday.length})',
+    kind: 'birthday',
+    listTitle: 'Birthday wishes ${formatDate(DateTime.now())}',
     items: [
       for (final s in appState.birthdaysToday)
         SmsItem(
+          studentId: s.id,
           name: s.name,
           number: parentNumber(s),
           message:
@@ -76,6 +80,19 @@ List<AppNotice> appNotices() {
         ),
       );
     }
+  }
+
+  if (appState.pendingSms > 0) {
+    out.add(
+      AppNotice(
+        icon: Icons.sms_failed_outlined,
+        color: AppColors.danger,
+        title: '${appState.pendingSms} parent SMS not sent yet',
+        detail:
+            'A phone ran out of SMS or sending stopped. Send the rest from your phone.',
+        onTap: (c) => _push(c, const PendingSmsScreen()),
+      ),
+    );
   }
 
   final birthdays = appState.birthdaysToday;

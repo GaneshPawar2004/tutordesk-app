@@ -42,9 +42,14 @@ class _FeesViewState extends State<FeesView> {
     showSmsSheet(
       context,
       title: 'SMS fee reminders (${due.length})',
+      kind: 'fees',
+      listTitle:
+          '${widget.schoolClass.name} · Fee reminders ${formatDate(DateTime.now())}',
+      classId: widget.schoolClass.id,
       items: [
         for (final s in due)
           SmsItem(
+            studentId: s.id,
             name: s.name,
             number: parentNumber(s),
             message:

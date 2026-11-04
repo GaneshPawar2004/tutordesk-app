@@ -3,8 +3,10 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../data/app_state.dart';
 import '../data/models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
@@ -92,46 +94,119 @@ class SimSms {
   }
 }
 
+/// SMS sent from this phone today, against the plan's daily limit (most
+/// Indian plans allow 100/day; changeable in Pending SMS).
+class SmsQuota {
+  static const _dateKey = 'sms_quota_date';
+  static const _usedKey = 'sms_quota_used';
+  static const _limitKey = 'sms_quota_limit';
+
+  static int used = 0;
+  static int limit = 100;
+
+  static String _today() => AppState.dateKey(DateTime.now());
+
+  static Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    limit = prefs.getInt(_limitKey) ?? 100;
+    used = prefs.getString(_dateKey) == _today()
+        ? prefs.getInt(_usedKey) ?? 0
+        : 0;
+  }
+
+  static int get remaining => (limit - used).clamp(0, 100000);
+
+  static Future<void> add(int n) async {
+    await load();
+    used += n;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_dateKey, _today());
+    await prefs.setInt(_usedKey, used);
+  }
+
+  static Future<void> setLimit(int value) async {
+    limit = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_limitKey, value);
+  }
+}
+
 class SmsItem {
   const SmsItem({
     required this.name,
     required this.number,
     required this.message,
+    this.studentId,
+    this.messageId,
   });
 
   final String name;
   final String number;
   final String message;
+  final String? studentId;
+
+  /// Set when the message is already saved on the server (Pending SMS).
+  final String? messageId;
 }
 
-/// Bottom sheet listing one SMS per student. On Android, SEND TO ALL sends every
-/// message straight from the teacher's SIM, one after another; each row shows
-/// its result. Without SMS permission (or on iPhone) each SEND opens the SMS app
-/// instead. Students without a number are shown but skipped.
+/// Bottom sheet listing one SMS per student.
+///
+/// The list is saved on the server first (an SMS batch), so messages this
+/// phone cannot send — e.g. its daily SMS limit is used up — stay in Pending
+/// SMS for the admin or other staff to send from their phones. On Android,
+/// SEND TO ALL sends straight from this phone's SIM, one after another.
+/// Without SMS permission (or on iPhone) each SEND opens the SMS app instead.
+/// [kind]: absent | fees | marks | birthday | receipt | other.
+/// [batchId]: continue an existing list (items then carry messageId).
 Future<void> showSmsSheet(
   BuildContext context, {
   required String title,
   required List<SmsItem> items,
-}) {
+  String kind = 'other',
+  String? listTitle,
+  String? classId,
+  String? batchId,
+}) async {
   if (items.isEmpty) {
     showInfo(context, 'No students to message.');
-    return Future.value();
+    return;
   }
-  return showModalBottomSheet(
+  await SmsQuota.load();
+  if (!context.mounted) return;
+  await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (_) => _SmsSheet(title: title, items: items),
+    builder: (_) => _SmsSheet(
+      title: title,
+      listTitle: listTitle ?? title,
+      items: items,
+      kind: kind,
+      classId: classId,
+      batchId: batchId,
+    ),
   );
+  appState.refreshSmsBatches().ignore();
 }
 
-enum _SmsState { idle, sending, sent, failed, opened }
+enum _SmsState { idle, sending, sent, failed, opened, elsewhere }
 
 class _SmsSheet extends StatefulWidget {
-  const _SmsSheet({required this.title, required this.items});
+  const _SmsSheet({
+    required this.title,
+    required this.listTitle,
+    required this.items,
+    required this.kind,
+    this.classId,
+    this.batchId,
+  });
 
   final String title;
+  final String listTitle;
   final List<SmsItem> items;
+  final String kind;
+  final String? classId;
+  final String? batchId;
 
   @override
   State<_SmsSheet> createState() => _SmsSheetState();
@@ -140,17 +215,20 @@ class _SmsSheet extends StatefulWidget {
 class _SmsSheetState extends State<_SmsSheet> {
   // Gap between messages so the operator does not flag the SIM for spam.
   static const _gap = Duration(milliseconds: 1500);
+  static const _whatsAppGreen = Color(0xFF25D366);
 
   late final _state = List.filled(widget.items.length, _SmsState.idle);
   late final _reason = List<String?>.filled(widget.items.length, null);
-  final _whatsAppOpened = <int>{};
+  late final _ids = [for (final it in widget.items) it.messageId];
+  late String? _batchId = widget.batchId;
   bool _sendingAll = false;
   bool _closed = false;
 
+  bool _hasNumber(int i) => widget.items[i].number.isNotEmpty;
+
   bool _sendable(int i) =>
-      widget.items[i].number.isNotEmpty &&
-      _state[i] != _SmsState.sent &&
-      _state[i] != _SmsState.sending;
+      _hasNumber(i) &&
+      const [_SmsState.idle, _SmsState.failed].contains(_state[i]);
 
   int get _remaining =>
       List.generate(widget.items.length, _sendable).where((b) => b).length;
@@ -169,11 +247,72 @@ class _SmsSheetState extends State<_SmsSheet> {
     });
   }
 
-  Future<void> _sendOne(int i) async {
+  /// Saves the list on the server once, so unsent messages are visible to all.
+  Future<bool> _ensureBatch() async {
+    if (_batchId != null) return true;
+    final idx = [
+      for (var i = 0; i < widget.items.length; i++)
+        if (_hasNumber(i)) i,
+    ];
+    try {
+      final (batch, ids) = await appState.createSmsBatch(
+        kind: widget.kind,
+        title: widget.listTitle,
+        classId: widget.classId,
+        messages: [
+          for (final i in idx)
+            {
+              'student': ?widget.items[i].studentId,
+              'name': widget.items[i].name,
+              'phone': widget.items[i].number,
+              'body': widget.items[i].message,
+            },
+        ],
+      );
+      _batchId = batch;
+      for (var k = 0; k < idx.length; k++) {
+        _ids[idx[k]] = ids[k];
+      }
+      return true;
+    } catch (e) {
+      if (mounted) showError(context, 'Could not save the SMS list: $e');
+      return false;
+    }
+  }
+
+  /// Reports a result; retried once so the list stays right on a bad network.
+  Future<void> _report(
+    int i, {
+    required bool sent,
+    String? reason,
+    String channel = 'sms',
+  }) async {
+    final id = _ids[i];
+    if (id == null) return;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        await appState.reportSms(
+          id,
+          sent: sent,
+          reason: reason,
+          channel: channel,
+        );
+        return;
+      } catch (_) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
+  }
+
+  /// Sends message [i] from the SIM and records the result.
+  Future<String?> _sendOne(int i) async {
     final it = widget.items[i];
     _set(i, _SmsState.sending);
     final error = await SimSms.send(it.number, it.message);
     _set(i, error == null ? _SmsState.sent : _SmsState.failed, error);
+    if (error == null) await SmsQuota.add(1);
+    await _report(i, sent: error == null, reason: error);
+    return error;
   }
 
   /// True when SMS can go straight from the SIM (asks for permission once).
@@ -191,68 +330,142 @@ class _SmsSheetState extends State<_SmsSheet> {
 
   Future<void> _sendAll() async {
     if (!await _simReady() || _closed) return;
-    setState(() => _sendingAll = true);
-    var first = true;
-    for (var i = 0; i < widget.items.length; i++) {
-      if (_closed) return;
-      if (!_sendable(i)) continue;
-      if (!first) await Future<void>.delayed(_gap);
-      first = false;
-      if (_closed) return;
-      await _sendOne(i);
+    if (!await _ensureBatch() || !mounted) return;
+    await SmsQuota.load();
+    if (!mounted) return;
+    if (SmsQuota.remaining == 0) {
+      await showNotice(
+        context,
+        "This phone has used today's ${SmsQuota.limit} SMS. The messages are saved "
+        'in Pending SMS, so the admin or another staff member can send them from their phone.',
+        title: 'Daily SMS limit reached',
+      );
+      return;
     }
+    setState(() => _sendingAll = true);
+
+    List<SmsMessage> claimed;
+    try {
+      claimed = await appState.claimSms(
+        batch: _batchId,
+        limit: SmsQuota.remaining.clamp(1, _remaining.clamp(1, 1000)),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _sendingAll = false);
+        showError(context, '$e');
+      }
+      return;
+    }
+    final indexOf = {for (var i = 0; i < _ids.length; i++) _ids[i]: i};
+    final queue = [for (final m in claimed) ?indexOf[m.id]];
+    // Unsent rows not given to this phone are being sent from another phone.
+    for (var i = 0; i < widget.items.length; i++) {
+      if (_sendable(i) && !queue.contains(i)) _set(i, _SmsState.elsewhere);
+    }
+
+    var sent = 0;
+    var failedInRow = 0;
+    String? stopReason;
+    final done = <int>{};
+    for (final i in queue) {
+      if (_closed) break;
+      if (done.isNotEmpty) await Future<void>.delayed(_gap);
+      if (_closed) break;
+      final error = await _sendOne(i);
+      done.add(i);
+      if (error == null) {
+        sent++;
+        failedInRow = 0;
+      } else if (error.contains('limit') || ++failedInRow >= 3) {
+        stopReason = error; // operator limit / no balance: stop, leave the rest
+        break;
+      }
+    }
+    final leftover = [
+      for (final i in queue)
+        if (!done.contains(i)) _ids[i]!,
+    ];
+    await appState.releaseSms(leftover).catchError((_) {});
     if (_closed || !mounted) return;
     setState(() => _sendingAll = false);
-    final sent = _state.where((s) => s == _SmsState.sent).length;
-    final failed = _state.where((s) => s == _SmsState.failed).length;
-    if (failed == 0) {
+
+    final notSent =
+        _remaining + _state.where((s) => s == _SmsState.elsewhere).length;
+    if (stopReason != null) {
+      await showNotice(
+        context,
+        'Sending stopped: $stopReason.\n\n$sent sent from this phone. The rest are saved in '
+        'Pending SMS for the admin or another staff member to send.',
+        title: 'Some SMS not sent',
+      );
+    } else if (notSent == 0) {
       showSuccess(context, '$sent SMS sent from your SIM');
     } else {
-      showError(
+      showInfo(
         context,
-        '$sent sent, $failed failed. Tap RETRY on failed ones.',
+        '$sent sent from this phone. $notSent left in Pending SMS for others to send.',
       );
     }
   }
 
   Future<void> _tapSend(int i) async {
+    final it = widget.items[i];
     if (await _simReady()) {
+      if (!await _ensureBatch()) return;
+      final id = _ids[i];
+      if (id != null) {
+        final claimed = await appState
+            .claimSms(ids: [id], limit: 1)
+            .catchError((_) => <SmsMessage>[]);
+        if (claimed.isEmpty) {
+          _set(i, _SmsState.elsewhere);
+          if (mounted) {
+            showInfo(context, 'Already sent or being sent from another phone.');
+          }
+          return;
+        }
+      }
       await _sendOne(i);
     } else if (mounted) {
-      final it = widget.items[i];
+      await _ensureBatch();
+      if (!mounted) return;
       await openSms(context, [it.number], it.message);
       _set(i, _SmsState.opened);
+      await _report(i, sent: true, channel: 'sms_app');
     }
   }
 
-  static const _whatsAppGreen = Color(0xFF25D366);
+  Future<void> _tapWhatsApp(int i) async {
+    final it = widget.items[i];
+    await _ensureBatch();
+    if (!mounted) return;
+    await openWhatsApp(context, it.number, it.message);
+    _set(i, _SmsState.opened);
+    await _report(i, sent: true, channel: 'whatsapp');
+  }
 
-  /// WhatsApp button + SMS status/button for row [i].
   Widget _trailing(int i) {
     final it = widget.items[i];
-    final opened = _whatsAppOpened.contains(i);
+    final busy = _sendingAll || it.number.isEmpty;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          tooltip: 'WhatsApp',
-          onPressed: it.number.isEmpty || _sendingAll
-              ? null
-              : () async {
-                  await openWhatsApp(context, it.number, it.message);
-                  if (!_closed) setState(() => _whatsAppOpened.add(i));
-                },
-          icon: Icon(
-            opened ? Icons.mark_chat_read : Icons.chat,
-            color: it.number.isEmpty ? null : _whatsAppGreen,
+        if (_state[i] != _SmsState.sent && _state[i] != _SmsState.opened)
+          IconButton(
+            tooltip: 'WhatsApp',
+            onPressed: busy ? null : () => _tapWhatsApp(i),
+            icon: Icon(
+              Icons.chat,
+              color: it.number.isEmpty ? null : _whatsAppGreen,
+            ),
           ),
-        ),
-        _smsTrailing(i),
+        _smsTrailing(i, busy),
       ],
     );
   }
 
-  Widget _smsTrailing(int i) {
+  Widget _smsTrailing(int i, bool busy) {
     switch (_state[i]) {
       case _SmsState.sending:
         return const SizedBox(
@@ -263,13 +476,16 @@ class _SmsSheetState extends State<_SmsSheet> {
       case _SmsState.sent:
         return const Icon(Icons.check_circle, color: AppColors.success);
       case _SmsState.opened:
-        return const Icon(Icons.open_in_new, color: AppColors.success);
+        return const Icon(Icons.mark_chat_read, color: AppColors.success);
+      case _SmsState.elsewhere:
+        return const Tooltip(
+          message: 'Being sent from another phone',
+          child: Icon(Icons.phonelink_ring, color: AppColors.textMuted),
+        );
       case _SmsState.failed:
       case _SmsState.idle:
         return TextButton(
-          onPressed: widget.items[i].number.isEmpty || _sendingAll
-              ? null
-              : () => _tapSend(i),
+          onPressed: busy ? null : () => _tapSend(i),
           child: Text(_state[i] == _SmsState.failed ? 'RETRY' : 'SEND'),
         );
     }
@@ -278,6 +494,7 @@ class _SmsSheetState extends State<_SmsSheet> {
   @override
   Widget build(BuildContext context) {
     final remaining = _remaining;
+    final quota = SmsQuota.remaining;
     return ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.8,
@@ -297,8 +514,9 @@ class _SmsSheetState extends State<_SmsSheet> {
             padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
             child: Text(
               SimSms.supported
-                  ? 'SMS go from your own SIM (normal SMS charges of your plan). '
-                        'Tap the green chat icon to send on WhatsApp instead.'
+                  ? 'SMS go from your own SIM · $quota of ${SmsQuota.limit} left today on this phone. '
+                        'Anything not sent stays in Pending SMS for others. '
+                        'Green chat icon = WhatsApp.'
                   : 'Tap SEND to open your SMS app, or the green chat icon for WhatsApp.',
               style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
             ),
@@ -322,7 +540,9 @@ class _SmsSheetState extends State<_SmsSheet> {
                   _sendingAll
                       ? 'SENDING…'
                       : remaining == 0
-                      ? 'ALL SENT'
+                      ? 'NOTHING LEFT TO SEND'
+                      : quota < remaining
+                      ? 'SEND $quota NOW (${remaining - quota} LEFT FOR OTHERS)'
                       : 'SEND TO ALL ($remaining)',
                 ),
               ),
@@ -336,12 +556,11 @@ class _SmsSheetState extends State<_SmsSheet> {
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final it = widget.items[i];
-                final hasNumber = it.number.isNotEmpty;
                 final failed = _state[i] == _SmsState.failed;
                 return ListTile(
                   title: Text(it.name),
                   subtitle: Text(
-                    !hasNumber
+                    !_hasNumber(i)
                         ? 'No mobile number saved'
                         : failed
                         ? 'Failed: ${_reason[i]}'
@@ -350,7 +569,7 @@ class _SmsSheetState extends State<_SmsSheet> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12,
-                      color: hasNumber && !failed ? null : AppColors.danger,
+                      color: _hasNumber(i) && !failed ? null : AppColors.danger,
                     ),
                   ),
                   trailing: _trailing(i),

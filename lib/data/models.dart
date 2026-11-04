@@ -191,3 +191,98 @@ class ClassTest {
   int get gradedCount =>
       marks.values.where((m) => !m.skip && m.marks != null).length;
 }
+
+/// One "send to all" SMS list saved on the server (see Pending SMS screen).
+class SmsBatch {
+  SmsBatch({
+    required this.id,
+    required this.title,
+    required this.kind,
+    required this.createdAt,
+    this.className = '',
+    this.createdBy = '',
+    this.total = 0,
+    this.sent = 0,
+    this.failed = 0,
+    this.remaining = 0,
+    this.expired = false,
+    this.senders = const [],
+  });
+
+  factory SmsBatch.fromJson(Map<String, dynamic> j) => SmsBatch(
+    id: j['id'] as String,
+    title: j['title'] as String,
+    kind: j['kind'] as String? ?? 'other',
+    createdAt: parseDate(j['createdAt']) ?? DateTime.now(),
+    className: j['className'] as String? ?? '',
+    createdBy: j['createdBy'] as String? ?? '',
+    total: (j['total'] as num?)?.toInt() ?? 0,
+    sent: (j['sent'] as num?)?.toInt() ?? 0,
+    failed: (j['failed'] as num?)?.toInt() ?? 0,
+    remaining: (j['remaining'] as num?)?.toInt() ?? 0,
+    expired: j['expired'] as bool? ?? false,
+    senders: [
+      for (final s in (j['senders'] as List? ?? const []))
+        (name: s['name'] as String, count: (s['count'] as num).toInt()),
+    ],
+  );
+
+  final String id;
+  final String title;
+  final String kind;
+  final DateTime createdAt;
+  final String className;
+  final String createdBy;
+  final int total;
+  final int sent;
+  final int failed;
+
+  /// Unsent and still sendable (not older than 2 days, not dismissed).
+  final int remaining;
+  final bool expired;
+  final List<({String name, int count})> senders;
+}
+
+/// One parent SMS of a batch.
+class SmsMessage {
+  SmsMessage({
+    required this.id,
+    required this.name,
+    required this.phone,
+    required this.body,
+    required this.status,
+    this.studentId,
+    this.reason,
+    this.channel,
+    this.sentBy,
+    this.sentAt,
+  });
+
+  factory SmsMessage.fromJson(Map<String, dynamic> j) => SmsMessage(
+    id: j['id'] as String,
+    name: j['name'] as String,
+    phone: j['phone'] as String,
+    body: j['body'] as String,
+    status: j['status'] as String,
+    studentId: j['student'] as String?,
+    reason: j['reason'] as String?,
+    channel: j['channel'] as String?,
+    sentBy: j['sentBy'] as String?,
+    sentAt: parseDate(j['sentAt']),
+  );
+
+  final String id;
+  final String name;
+  final String phone;
+  final String body;
+
+  /// pending | sent | failed | dismissed
+  final String status;
+  final String? studentId;
+  final String? reason;
+  final String? channel;
+  final String? sentBy;
+  final DateTime? sentAt;
+
+  bool get unsent => status == 'pending' || status == 'failed';
+}

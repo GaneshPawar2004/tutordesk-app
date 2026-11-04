@@ -154,8 +154,12 @@ void sendReceipt(
   showSmsSheet(
     context,
     title: 'Fee receipt',
+    kind: 'receipt',
+    listTitle: 'Fee receipt · ${s.name} · ${formatMoney(amount)}',
+    classId: s.classId,
     items: [
       SmsItem(
+        studentId: s.id,
         name: s.name,
         number: parentNumber(s),
         message: receiptText(s, amount: amount, paidAt: paidAt),
