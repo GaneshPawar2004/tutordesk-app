@@ -36,6 +36,7 @@ void showBirthdayWishes(BuildContext context) {
     context,
     title: 'Birthday wishes (${appState.birthdaysToday.length})',
     kind: 'birthday',
+    dedupeKey: 'birthday:${AppState.dateKey(DateTime.now())}',
     listTitle: 'Birthday wishes ${formatDate(DateTime.now())}',
     items: [
       for (final s in appState.birthdaysToday)

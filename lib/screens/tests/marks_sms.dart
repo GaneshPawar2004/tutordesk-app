@@ -14,9 +14,10 @@ Future<void> showMarksSms(BuildContext context, ClassTest test) {
   final items = <SmsItem>[];
   for (final s in appState.studentsOf(test.classId, includeDisabled: false)) {
     final m = test.marks[s.id];
-    if (m?.skip ?? false) continue;
-    final marks = m?.marks;
-    final remarks = (m?.remarks ?? '').isEmpty ? '' : ' Remarks: ${m!.remarks}';
+    // No entry (e.g. joined after the marks were saved) or skipped: no SMS.
+    if (m == null || m.skip) continue;
+    final marks = m.marks;
+    final remarks = m.remarks.isEmpty ? '' : ' Remarks: ${m.remarks}';
     items.add(
       SmsItem(
         studentId: s.id,
@@ -34,6 +35,7 @@ Future<void> showMarksSms(BuildContext context, ClassTest test) {
     context,
     title: 'SMS marks — ${test.subject}',
     kind: 'marks',
+    dedupeKey: 'marks:${test.id}:${AppState.dateKey(DateTime.now())}',
     listTitle: '$className · Marks: ${test.subject}',
     classId: test.classId,
     items: items,

@@ -65,6 +65,37 @@ class FakeApi {
     return {...s, 'feesDue': due < 0 ? 0 : due};
   }
 
+  /// classId|date -> saved version.
+  final attendanceVersion = <String, int>{};
+
+  /// classId|date -> studentId -> absence SMS status.
+  final absentSms = <String, Map<String, String>>{};
+
+  Map<String, dynamic> _attendanceDay(String classId, String date) {
+    final key = '$classId|$date';
+    final saved = {
+      for (final r in attendance[key] ?? const <Map<String, dynamic>>[])
+        r['student']: r['status'],
+    };
+    return {
+      'date': date,
+      'saved': attendance.containsKey(key),
+      'version': attendanceVersion[key],
+      'savedBy': attendance.containsKey(key) ? 'Asha Patil' : null,
+      'savedAt': attendance.containsKey(key) ? _now : null,
+      'records': [
+        for (final s in students.where((s) => s['class'] == classId))
+          {
+            'student': s['id'],
+            'status': saved[s['id']] ?? 'present',
+            'saved': saved.containsKey(s['id']),
+            'sms': absentSms[key]?[s['id']],
+          },
+      ],
+      'changes': [],
+    };
+  }
+
   Map<String, dynamic> _test(Map t) => {
     ...t,
     'gradedCount': (t['marks'] as List)
@@ -161,6 +192,31 @@ class FakeApi {
       c['name'] = body['name'];
       return ok({'class': c});
     }
+    // Absence SMS list from SAVED attendance (one per student per day).
+    if (seg.length == 4 && seg[0] == 'classes' && seg[3] == 'sms') {
+      final key = '${seg[1]}|${body['date']}';
+      final absent = [
+        for (final r in attendance[key] ?? const <Map<String, dynamic>>[])
+          if (r['status'] == 'absent') r['student'],
+      ];
+      return ok({
+        'batch': 'absent-$key',
+        'title': 'Absent',
+        'messages': [
+          for (final s in students.where((s) => absent.contains(s['id'])))
+            {
+              'id': 'msg-${s['id']}',
+              'student': s['id'],
+              'name': s['name'],
+              'phone': s['parentMobile'] ?? '9800000000',
+              'body': 'Dear Parent, ${s['name']} was absent.',
+              'status': absentSms[key]?[s['id']] ?? 'pending',
+              'sentBy': 'Asha Patil',
+            },
+        ],
+        'noNumber': [],
+      });
+    }
     if (seg.length == 3 && seg[0] == 'classes') {
       final classId = seg[1];
       switch ((seg[2], m)) {
@@ -191,22 +247,14 @@ class FakeApi {
           students.add(s);
           return ok({'student': _student(s)}, 201);
         case ('attendance', 'GET'):
-          final key = '$classId|${req.url.queryParameters['date']}';
-          final saved = attendance[key];
-          return ok({
-            'saved': saved != null,
-            'records':
-                saved ??
-                [
-                  for (final s in students.where((s) => s['class'] == classId))
-                    {'student': s['id'], 'status': 'present'},
-                ],
-          });
+          return ok(_attendanceDay(classId, req.url.queryParameters['date']!));
         case ('attendance', 'PUT'):
-          attendance['$classId|${body['date']}'] = [
+          final key = '$classId|${body['date']}';
+          attendance[key] = [
             for (final r in body['records']) Map<String, dynamic>.from(r),
           ];
-          return ok({'saved': true, 'records': body['records']});
+          attendanceVersion[key] = (attendanceVersion[key] ?? 0) + 1;
+          return ok(_attendanceDay(classId, body['date']));
         case ('tests', 'GET'):
           return ok({
             'tests': [

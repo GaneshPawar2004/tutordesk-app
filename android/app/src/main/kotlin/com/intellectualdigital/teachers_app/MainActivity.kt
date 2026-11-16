@@ -133,12 +133,12 @@ class MainActivity : FlutterActivity() {
             )
             pending[id] = Pending(parts.size, result)
             sms.sendMultipartTextMessage(phone, null, parts, sent, null)
-            // Some devices never fire the sent intent; don't leave Dart waiting forever.
+            // Some devices never fire the sent intent (or Android is waiting for the user to
+            // allow "many SMS"); don't leave Dart waiting forever. The SMS was handed to the
+            // phone, so report it as "unconfirmed" — not "failed", which would send it twice.
             Handler(Looper.getMainLooper()).postDelayed({
-                pending.remove(id)?.result?.success(
-                    mapOf("status" to "failed", "reason" to "Phone did not confirm sending within 60 seconds"),
-                )
-            }, 60_000)
+                pending.remove(id)?.result?.success(mapOf("status" to "unconfirmed"))
+            }, 90_000)
         } catch (e: Exception) {
             pending.remove(id)
             result.success(mapOf("status" to "failed", "reason" to (e.message ?: "Could not send SMS")))

@@ -43,6 +43,9 @@ class _FeesViewState extends State<FeesView> {
       context,
       title: 'SMS fee reminders (${due.length})',
       kind: 'fees',
+      // Once per student per day: tapping again does not remind twice.
+      dedupeKey:
+          'fees:${widget.schoolClass.id}:${AppState.dateKey(DateTime.now())}',
       listTitle:
           '${widget.schoolClass.name} · Fee reminders ${formatDate(DateTime.now())}',
       classId: widget.schoolClass.id,

@@ -155,6 +155,7 @@ void sendReceipt(
     context,
     title: 'Fee receipt',
     kind: 'receipt',
+    dedupeKey: 'receipt:${s.id}:${paidAt.millisecondsSinceEpoch}',
     listTitle: 'Fee receipt · ${s.name} · ${formatMoney(amount)}',
     classId: s.classId,
     items: [

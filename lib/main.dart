@@ -20,10 +20,11 @@ void main() {
     final context = navigatorKey.currentContext;
     if (context != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Your session has ended. Please sign in again.',
-            style: TextStyle(fontSize: 13),
+            appState.sessionEndMessage ??
+                'Your session has ended. Please sign in again.',
+            style: const TextStyle(fontSize: 13),
           ),
         ),
       );

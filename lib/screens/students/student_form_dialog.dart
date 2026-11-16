@@ -91,17 +91,34 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
       feesDueDate: _dueDate,
     );
     final photo = _newPhoto;
-    final ok = await runApi(context, () async {
-      final Student s;
-      if (_isEdit) {
-        s = widget.student!;
-        await appState.updateStudent(s, body);
-      } else {
-        s = await appState.addStudent(widget.schoolClass.id, body);
-      }
-      if (photo != null) await appState.uploadStudentPhoto(s, photo);
+    final s = await runApiValue(context, () async {
+      if (!_isEdit) return appState.addStudent(widget.schoolClass.id, body);
+      await appState.updateStudent(widget.student!, body);
+      return widget.student!;
     });
-    if (ok && mounted) Navigator.of(context).pop(true);
+    if (s == null || !mounted) return;
+    // The student is saved now; a failed photo must not keep the form open
+    // (pressing ADD again would create the student twice).
+    if (photo != null) {
+      String? photoError;
+      await runApiValue(context, () async {
+        try {
+          await appState.uploadStudentPhoto(s, photo);
+        } catch (e) {
+          photoError = '$e';
+        }
+        return true;
+      });
+      if (photoError != null && mounted) {
+        await showNotice(
+          context,
+          '${s.name} was saved, but the photo could not be uploaded: $photoError\n\n'
+          'You can add it later from the student → View Photo.',
+          title: 'Photo not saved',
+        );
+      }
+    }
+    if (mounted) Navigator.of(context).pop(true);
   }
 
   @override

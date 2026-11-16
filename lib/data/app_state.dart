@@ -14,6 +14,7 @@ class AppState extends ChangeNotifier {
   AppState._() {
     api.onUnauthorized = _expireSession;
     api.onAccessDenied = _denyAccess;
+    api.onAccountBlocked = _expireSession;
   }
   static final AppState instance = AppState._();
 
@@ -159,13 +160,24 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _denyAccess(String message) {
+  void _denyAccess(String code, String message) {
     if (!isLoggedIn) return;
     final wasAllowed = accessAllowed;
     accessAllowed = false;
     accessMessage = message;
+    // Exact status for the access screen (blocked / plan ended / trial ended).
+    if (code == 'ACCESS_BLOCKED') accessStatus = 'blocked';
     notifyListeners();
     if (wasAllowed) onAccessDenied?.call();
+  }
+
+  void _denyAccessFromStatus() {
+    final message = accessMessage;
+    accessAllowed = true; // so _denyAccess sees the change and navigates
+    _denyAccess(
+      accessStatus == 'blocked' ? 'ACCESS_BLOCKED' : 'ACCESS_EXPIRED',
+      message,
+    );
   }
 
   // ---- My profile ----------------------------------------------------------
@@ -213,8 +225,12 @@ class AppState extends ChangeNotifier {
     await prefs.remove(_tokenKey);
   }
 
-  void _expireSession() {
+  /// Why the last session ended (shown on the login screen), if known.
+  String? sessionEndMessage;
+
+  void _expireSession([String? message]) {
     if (!isLoggedIn) return;
+    sessionEndMessage = message;
     _clearSession().then((_) {
       notifyListeners();
       onSessionExpired?.call();
@@ -230,6 +246,12 @@ class AppState extends ChangeNotifier {
     loading = true;
     notifyListeners();
     try {
+      // Fresh role, fee access and plan (the admin may have changed them).
+      _applySession(await api.get('/auth/me'));
+      if (!accessAllowed) {
+        _denyAccessFromStatus();
+        return;
+      }
       final res = await api.get('/classes');
       final loaded = [
         for (final c in res['classes'] as List) SchoolClass.fromJson(c),
@@ -390,10 +412,35 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Payment that got no reply (network), per student: retrying the same
+  /// amount sends the same id, so the server does not save it twice.
+  final Map<String, ({String ref, double amount})> _unconfirmedPayments = {};
+  var _refSeq = 0;
+
   Future<void> collectFee(Student s, double amount) async {
-    final res = await api.post('/students/${s.id}/fees/payments', {
-      'amount': amount,
-    });
+    final last = _unconfirmedPayments[s.id];
+    final ref = last != null && last.amount == amount
+        ? last.ref
+        : 'p${DateTime.now().microsecondsSinceEpoch}-${_refSeq++}';
+    _unconfirmedPayments[s.id] = (ref: ref, amount: amount);
+    try {
+      final res = await api.post('/students/${s.id}/fees/payments', {
+        'amount': amount,
+        'clientRef': ref,
+      });
+      _unconfirmedPayments.remove(s.id);
+      _assignStudent(s, res['student']);
+      notifyListeners();
+    } on ApiException catch (e) {
+      // A real answer from the server (e.g. "exceeds due") means it was not saved.
+      if (e.status != 0) _unconfirmedPayments.remove(s.id);
+      rethrow;
+    }
+  }
+
+  /// Admin only: deletes a wrong payment and lowers the paid amount.
+  Future<void> deletePayment(Student s, FeePayment p) async {
+    final res = await api.delete('/students/${s.id}/fees/payments/${p.id}');
     _assignStudent(s, res['student']);
     notifyListeners();
   }
@@ -413,23 +460,26 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Saves a "send to all" list; returns the batch id and its message ids in
-  /// the same order as [messages].
-  Future<(String, List<String>)> createSmsBatch({
+  /// Saves a "send to all" list; returns the batch id and ALL its messages
+  /// (with [key], a list saved earlier is reused and students already in it
+  /// are not added again — their messages come back with their status).
+  Future<(String, List<SmsMessage>)> createSmsBatch({
     required String kind,
     required String title,
     String? classId,
+    String? key,
     required List<Map<String, dynamic>> messages,
   }) async {
     final res = await api.post('/sms/batches', {
       'kind': kind,
       'title': title,
       'classId': ?classId,
+      'key': ?key,
       'messages': messages,
     });
     return (
       res['batch'] as String,
-      [for (final m in res['messages'] as List) m['id'] as String],
+      [for (final m in res['messages'] as List) SmsMessage.fromJson(m)],
     );
   }
 
@@ -448,16 +498,20 @@ class AppState extends ChangeNotifier {
   }
 
   /// [channel]: sms (from SIM), whatsapp, sms_app (phone's SMS app).
-  Future<void> reportSms(
+  /// `stop`: the list was stopped from Pending SMS — send no more of it.
+  Future<({bool stop})> reportSms(
     String id, {
     required bool sent,
     String? reason,
     String channel = 'sms',
-  }) => api.post('/sms/$id/report', {
-    'status': sent ? 'sent' : 'failed',
-    'reason': ?reason,
-    'channel': channel,
-  });
+  }) async {
+    final res = await api.post('/sms/$id/report', {
+      'status': sent ? 'sent' : 'failed',
+      'reason': ?reason,
+      'channel': channel,
+    });
+    return (stop: res is Map && res['stop'] == true);
+  }
 
   Future<void> releaseSms(List<String> ids) async {
     if (ids.isNotEmpty) await api.post('/sms/release', {'ids': ids});
@@ -563,27 +617,55 @@ class AppState extends ChangeNotifier {
       .firstWhere((s) => s.name == v, orElse: () => AttendanceStatus.present);
 
   /// Saved attendance of a class for [date], or null if not saved yet.
-  Future<Map<String, AttendanceStatus>?> loadAttendance(
-    String classId,
-    DateTime date,
-  ) async {
-    final res = await api.get('/classes/$classId/attendance', {
-      'date': dateKey(date),
-    });
-    if (res['saved'] != true) return null;
-    return {
-      for (final r in res['records'] as List)
-        r['student'] as String: _status(r['status']),
-    };
+  AttendanceDay _attendanceDay(dynamic res) {
+    final records = (res['records'] as List).cast<Map<String, dynamic>>();
+    return AttendanceDay(
+      saved: res['saved'] == true,
+      version: (res['version'] as num?)?.toInt(),
+      savedBy: res['savedBy'] as String?,
+      savedAt: parseDate(res['savedAt']),
+      marks: {
+        for (final r in records) r['student'] as String: _status(r['status']),
+      },
+      savedMarks: {
+        for (final r in records)
+          if (r['saved'] == true) r['student'] as String,
+      },
+      sms: {
+        for (final r in records)
+          if (r['sms'] case final String s) r['student'] as String: s,
+      },
+      changes: [
+        for (final c in (res['changes'] as List? ?? const []))
+          AttendanceChange(
+            studentName: c['name'] as String,
+            from: _status(c['from']),
+            to: _status(c['to']),
+            by: c['by'] as String? ?? '',
+            at: parseDate(c['at']) ?? DateTime.now(),
+          ),
+      ],
+    );
   }
 
-  Future<void> saveAttendance(
+  /// Saved attendance of a class for [date] (with who saved it, its version,
+  /// absence-SMS status per student and later changes).
+  Future<AttendanceDay> loadAttendance(String classId, DateTime date) async =>
+      _attendanceDay(
+        await api.get('/classes/$classId/attendance', {'date': dateKey(date)}),
+      );
+
+  /// Saves the marks. [version] is the one the screen was loaded with; the
+  /// server answers 409 ATTENDANCE_CHANGED if someone saved in between.
+  Future<AttendanceDay> saveAttendance(
     String classId,
     DateTime date,
-    Map<String, AttendanceStatus> marks,
-  ) async {
-    await api.put('/classes/$classId/attendance', {
+    Map<String, AttendanceStatus> marks, {
+    required int? version,
+  }) async {
+    final res = await api.put('/classes/$classId/attendance', {
       'date': dateKey(date),
+      'version': version,
       'records': [
         for (final e in marks.entries)
           {'student': e.key, 'status': e.value.name},
@@ -591,7 +673,33 @@ class AppState extends ChangeNotifier {
     });
     _invalidateAttendance();
     notifyListeners();
-    await refreshDashboard();
+    refreshDashboard().ignore();
+    return _attendanceDay(res);
+  }
+
+  /// The absence-SMS list of a class and date, built by the server from the
+  /// SAVED attendance: one message per absent student per day (asking again
+  /// adds only newly absent students).
+  Future<
+    ({
+      String batch,
+      String title,
+      List<SmsMessage> messages,
+      List<String> noNumber,
+    })
+  >
+  absentSmsList(String classId, DateTime date) async {
+    final res = await api.post('/classes/$classId/attendance/sms', {
+      'date': dateKey(date),
+    });
+    return (
+      batch: res['batch'] as String,
+      title: res['title'] as String,
+      messages: [
+        for (final m in res['messages'] as List) SmsMessage.fromJson(m),
+      ],
+      noNumber: [for (final n in res['noNumber'] as List) n as String],
+    );
   }
 
   // Report totals and student histories are fetched when first shown and

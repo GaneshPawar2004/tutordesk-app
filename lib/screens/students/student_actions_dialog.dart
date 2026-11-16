@@ -146,26 +146,28 @@ Future<void> showStudentActionsDialog(
             }
           }),
         ),
-        _Action(
-          Icons.person_remove_outlined,
-          'Delete',
-          const Color(0xFFC62828),
-          const Color(0xFFFFEBEE),
-          () => run(() async {
-            final ok = await confirmDialog(
-              context,
-              title: 'Delete ${s.name}?',
-              message:
-                  'This removes the student with all attendance, marks and fee records.',
-            );
-            if (ok && context.mounted) {
-              if (await runApi(context, () => appState.deleteStudent(s)) &&
-                  context.mounted) {
-                showSuccess(context, 'Student deleted');
+        // Only the admin can delete students.
+        if (appState.isOwner)
+          _Action(
+            Icons.person_remove_outlined,
+            'Delete',
+            const Color(0xFFC62828),
+            const Color(0xFFFFEBEE),
+            () => run(() async {
+              final ok = await confirmDialog(
+                context,
+                title: 'Delete ${s.name}?',
+                message:
+                    'This removes the student with all attendance, marks and fee records.',
+              );
+              if (ok && context.mounted) {
+                if (await runApi(context, () => appState.deleteStudent(s)) &&
+                    context.mounted) {
+                  showSuccess(context, 'Student deleted');
+                }
               }
-            }
-          }),
-        ),
+            }),
+          ),
       ];
 
       return Dialog(

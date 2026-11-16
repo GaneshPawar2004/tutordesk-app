@@ -286,3 +286,51 @@ class SmsMessage {
 
   bool get unsent => status == 'pending' || status == 'failed';
 }
+
+/// One change to a saved attendance mark (who changed it, from → to, when).
+class AttendanceChange {
+  AttendanceChange({
+    required this.studentName,
+    required this.from,
+    required this.to,
+    required this.by,
+    required this.at,
+  });
+
+  final String studentName;
+  final AttendanceStatus from;
+  final AttendanceStatus to;
+  final String by;
+  final DateTime at;
+}
+
+/// Attendance of a class on one date, as saved on the server.
+class AttendanceDay {
+  AttendanceDay({
+    required this.saved,
+    required this.version,
+    required this.marks,
+    required this.savedMarks,
+    required this.sms,
+    required this.changes,
+    this.savedBy,
+    this.savedAt,
+  });
+
+  final bool saved;
+
+  /// Send back when saving; the server refuses a save based on an old version.
+  final int? version;
+  final String? savedBy;
+  final DateTime? savedAt;
+
+  /// studentId → status (unsaved students default to present).
+  final Map<String, AttendanceStatus> marks;
+
+  /// Students that have a saved mark for this date.
+  final Set<String> savedMarks;
+
+  /// studentId → absence SMS status for this date (sent / pending / failed / dismissed).
+  final Map<String, String> sms;
+  final List<AttendanceChange> changes;
+}

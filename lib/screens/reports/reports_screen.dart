@@ -31,11 +31,14 @@ class ReportsScreen extends StatelessWidget {
                 _AttendanceCard(schoolClass: c),
                 const SizedBox(height: 10),
               ],
-              const SizedBox(height: 9),
-              const _Heading('Fee Collection Summary'),
-              for (final c in appState.classes) ...[
-                _FeeCard(schoolClass: c),
-                const SizedBox(height: 10),
+              // Staff without fee access get no fee amounts from the server.
+              if (appState.canAccessFees) ...[
+                const SizedBox(height: 9),
+                const _Heading('Fee Collection Summary'),
+                for (final c in appState.classes) ...[
+                  _FeeCard(schoolClass: c),
+                  const SizedBox(height: 10),
+                ],
               ],
             ],
           );

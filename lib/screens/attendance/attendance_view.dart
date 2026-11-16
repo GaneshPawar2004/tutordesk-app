@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../data/api.dart';
 import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
@@ -7,17 +8,28 @@ import '../../utils/format.dart';
 import '../../utils/phone.dart';
 import '../../widgets/common.dart';
 
+String _time(DateTime d) {
+  final t = TimeOfDay.fromDateTime(d);
+  final h = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+  return '$h:${t.minute.toString().padLeft(2, '0')} ${t.period == DayPeriod.am ? 'AM' : 'PM'}';
+}
+
 class AttendanceView extends StatefulWidget {
   const AttendanceView({
     super.key,
     required this.schoolClass,
     required this.onBack,
     required this.bottomBar,
+    this.unsaved,
   });
 
   final SchoolClass schoolClass;
   final VoidCallback onBack;
   final Widget bottomBar;
+
+  /// Set to true while marks differ from what is saved (the class screen asks
+  /// before leaving).
+  final ValueNotifier<bool>? unsaved;
 
   @override
   State<AttendanceView> createState() => _AttendanceViewState();
@@ -29,6 +41,11 @@ class _AttendanceViewState extends State<AttendanceView> {
   String _query = '';
   bool _sortByRoll = true;
 
+  /// What the server has for [_date]; null while loading or if loading failed.
+  AttendanceDay? _day;
+  bool _loading = false;
+  String? _loadError;
+
   List<Student> get _students =>
       appState.studentsOf(widget.schoolClass.id, includeDisabled: false);
 
@@ -38,37 +55,76 @@ class _AttendanceViewState extends State<AttendanceView> {
     _load();
   }
 
-  bool _loading = false;
+  @override
+  void dispose() {
+    widget.unsaved?.value = false;
+    super.dispose();
+  }
 
-  /// Loads saved attendance for [_date], defaulting everyone to Present.
+  /// Marks differ from the saved (or default) ones.
+  bool get _dirty {
+    final day = _day;
+    if (day == null) return false;
+    return _students.any(
+      (s) =>
+          (_marks[s.id] ?? AttendanceStatus.present) !=
+          (day.marks[s.id] ?? AttendanceStatus.present),
+    );
+  }
+
+  void _changed() => widget.unsaved?.value = _dirty;
+
+  void _setMark(String id, AttendanceStatus v) {
+    setState(() => _marks[id] = v);
+    _changed();
+  }
+
+  /// Loads saved attendance for [_date]. While loading, or if it failed,
+  /// saving is not possible — it would overwrite real marks with defaults.
   Future<void> _load() async {
     final date = _date;
     setState(() {
       _loading = true;
+      _loadError = null;
+      _day = null;
       _marks
         ..clear()
         ..addEntries(
           _students.map((s) => MapEntry(s.id, AttendanceStatus.present)),
         );
     });
+    _changed();
     try {
-      final saved = await appState.loadAttendance(widget.schoolClass.id, date);
+      final day = await appState.loadAttendance(widget.schoolClass.id, date);
       if (!mounted || date != _date) return;
       setState(() {
+        _day = day;
         for (final s in _students) {
-          _marks[s.id] = saved?[s.id] ?? AttendanceStatus.present;
+          _marks[s.id] = day.marks[s.id] ?? AttendanceStatus.present;
         }
       });
     } catch (e) {
-      if (mounted) showError(context, '$e');
+      if (mounted && date == _date) setState(() => _loadError = '$e');
     } finally {
       if (mounted && date == _date) setState(() => _loading = false);
     }
+    _changed();
   }
 
   int _count(AttendanceStatus s) => _marks.values.where((v) => v == s).length;
 
+  Future<bool> _confirmDiscard() async {
+    if (!_dirty) return true;
+    return confirmDialog(
+      context,
+      title: 'Discard changes?',
+      message: 'Your attendance changes are not saved yet.',
+      confirmLabel: 'DISCARD',
+    );
+  }
+
   Future<void> _pickDate() async {
+    if (!await _confirmDiscard() || !mounted) return;
     final picked = await showAppDatePicker(
       context,
       initial: _date,
@@ -79,48 +135,113 @@ class _AttendanceViewState extends State<AttendanceView> {
     _load();
   }
 
-  Future<void> _save() async {
-    if (_loading) return;
-    final ok = await runApi(
-      context,
-      () => appState.saveAttendance(widget.schoolClass.id, _date, _marks),
-    );
-    if (!ok || !mounted) return;
-    showNotice(
-      context,
-      '✅ Attendance saved for ${formatDate(_date)}.\n'
-      'Present: ${_count(AttendanceStatus.present)} · '
-      'Absent: ${_count(AttendanceStatus.absent)} · '
-      'Leave: ${_count(AttendanceStatus.leave)}',
-    );
+  /// Saves; returns true when saved. [quiet]: no "saved" notice.
+  Future<bool> _save({bool quiet = false}) async {
+    final day = _day;
+    if (_loading || day == null) return false;
+    try {
+      final saved = await runApiValue(
+        context,
+        () => appState.saveAttendance(
+          widget.schoolClass.id,
+          _date,
+          Map.of(_marks),
+          version: day.version,
+        ),
+        rethrowIf: (e) => e is ApiException && e.code == 'ATTENDANCE_CHANGED',
+      );
+      if (saved == null || !mounted) return false;
+      setState(() => _day = saved);
+      _changed();
+      if (!quiet) {
+        showNotice(
+          context,
+          '✅ Attendance saved for ${formatDate(_date)}.\n'
+          'Present: ${_count(AttendanceStatus.present)} · '
+          'Absent: ${_count(AttendanceStatus.absent)} · '
+          'Leave: ${_count(AttendanceStatus.leave)}',
+        );
+      }
+      return true;
+    } on ApiException catch (e) {
+      // Someone saved this day from another phone after it was opened here.
+      if (!mounted) return false;
+      await showNotice(
+        context,
+        '${e.message}\n\nThe latest saved attendance will now be shown. '
+        'Make your changes again if they are still needed.',
+        title: 'Attendance was updated',
+      );
+      await _load();
+      return false;
+    }
   }
 
-  void _smsAbsentParents() {
-    final absent = _students
-        .where((s) => _marks[s.id] == AttendanceStatus.absent)
-        .toList();
-    if (absent.isEmpty) {
-      showInfo(context, 'No absentees to notify.');
+  /// SMS to parents of students SAVED as absent, once per student per day.
+  Future<void> _smsAbsentParents() async {
+    final day = _day;
+    if (day == null) return;
+    if (_dirty) {
+      final save = await confirmDialog(
+        context,
+        title: 'Save first?',
+        message:
+            'SMS go only to students saved as absent. Save the attendance now?',
+        confirmLabel: 'SAVE',
+        confirmColor: AppColors.primary,
+      );
+      if (!save || !mounted || !await _save(quiet: true) || !mounted) return;
+    } else if (!day.saved) {
+      showInfo(context, 'Save the attendance first.');
       return;
     }
-    showSmsSheet(
+    final list = await runApiValue(
       context,
-      title: 'SMS absent parents (${absent.length})',
+      () => appState.absentSmsList(widget.schoolClass.id, _date),
+    );
+    if (list == null || !mounted) return;
+    if (list.messages.isEmpty) {
+      showInfo(
+        context,
+        list.noNumber.isEmpty
+            ? 'No students are saved as absent on ${formatDate(_date)}.'
+            : 'No mobile number saved for: ${list.noNumber.join(', ')}.',
+      );
+      return;
+    }
+    final unsent = list.messages.where((m) => m.unsent).length;
+    if (unsent == 0) {
+      showInfo(
+        context,
+        'All ${list.messages.length} absent parents already got the SMS for ${formatDate(_date)}.',
+      );
+      return;
+    }
+    if (list.noNumber.isNotEmpty) {
+      showInfo(
+        context,
+        'No mobile number saved for: ${list.noNumber.join(', ')}.',
+      );
+    }
+    await showSmsSheet(
+      context,
+      title: 'SMS absent parents ($unsent to send)',
       kind: 'absent',
-      listTitle: '${widget.schoolClass.name} · Absent on ${formatDate(_date)}',
-      classId: widget.schoolClass.id,
+      batchId: list.batch,
       items: [
-        for (final s in absent)
+        for (final m in list.messages)
           SmsItem(
-            studentId: s.id,
-            name: s.name,
-            number: parentNumber(s),
-            message:
-                'Dear Parent, ${s.name} (${widget.schoolClass.name}) was '
-                'absent on ${formatDate(_date)}.',
+            studentId: m.studentId,
+            name: m.name,
+            number: m.phone,
+            message: m.body,
+            messageId: m.id,
+            status: m.status,
+            sentBy: m.sentBy,
           ),
       ],
     );
+    if (mounted) _load(); // refresh the SMS ticks
   }
 
   void _markAll(AttendanceStatus status) {
@@ -129,6 +250,103 @@ class _AttendanceViewState extends State<AttendanceView> {
         _marks[id] = status;
       }
     });
+    _changed();
+  }
+
+  void _showChanges(AttendanceDay day) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Changes after saving'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final c in day.changes)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.edit_note),
+                  title: Text(
+                    '${c.studentName}: ${c.from.label} → ${c.to.label}',
+                  ),
+                  subtitle: Text(
+                    'by ${c.by.isEmpty ? '—' : c.by} · ${formatDate(c.at)} ${_time(c.at)}',
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CLOSE'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusBanner() {
+    if (_loadError != null) {
+      return Card(
+        color: const Color(0xFFFFEBEE),
+        child: ListTile(
+          leading: const Icon(Icons.cloud_off, color: AppColors.danger),
+          title: const Text('Could not load the saved attendance'),
+          subtitle: Text(
+            '$_loadError\nSaving is off until it loads, so saved marks are not overwritten.',
+          ),
+          trailing: TextButton(onPressed: _load, child: const Text('RETRY')),
+        ),
+      );
+    }
+    final day = _day;
+    if (day == null) return const SizedBox.shrink();
+    final dirty = _dirty;
+    final text = !day.saved
+        ? 'Not saved yet for this date'
+        : 'Saved by ${day.savedBy ?? '—'}'
+              '${day.savedAt == null ? '' : ' at ${_time(day.savedAt!)}, ${formatDate(day.savedAt)}'}';
+    return Card(
+      color: dirty
+          ? const Color(0xFFFFF8E1)
+          : day.saved
+          ? const Color(0xFFE8F5E9)
+          : const Color(0xFFF4F4F4),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Row(
+          children: [
+            Icon(
+              dirty
+                  ? Icons.edit_outlined
+                  : day.saved
+                  ? Icons.check_circle
+                  : Icons.info_outline,
+              color: dirty
+                  ? AppColors.warning
+                  : day.saved
+                  ? AppColors.success
+                  : AppColors.textMuted,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                dirty ? 'You have unsaved changes · $text' : text,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            if (day.changes.isNotEmpty)
+              TextButton(
+                onPressed: () => _showChanges(day),
+                child: Text('EDITED ${day.changes.length}× · VIEW'),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -147,6 +365,7 @@ class _AttendanceViewState extends State<AttendanceView> {
     for (final s in _students) {
       _marks.putIfAbsent(s.id, () => AttendanceStatus.present);
     }
+    final canSave = !_loading && _day != null;
 
     return Scaffold(
       bottomNavigationBar: widget.bottomBar,
@@ -207,7 +426,9 @@ class _AttendanceViewState extends State<AttendanceView> {
                     padding: EdgeInsets.only(top: 6),
                     child: LinearProgressIndicator(),
                   ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 6),
+                _statusBanner(),
+                const SizedBox(height: 6),
                 const InfoBanner(
                   children: [
                     TextSpan(text: 'Everyone is '),
@@ -304,7 +525,7 @@ class _AttendanceViewState extends State<AttendanceView> {
                 SizedBox(
                   height: 45,
                   child: ElevatedButton.icon(
-                    onPressed: _save,
+                    onPressed: canSave ? _save : null,
                     icon: const Icon(Icons.check_circle_outline, size: 21),
                     label: const Text(
                       'SAVE ATTENDANCE',
@@ -317,7 +538,8 @@ class _AttendanceViewState extends State<AttendanceView> {
                   _StudentAttendanceCard(
                     student: s,
                     status: _marks[s.id]!,
-                    onChanged: (v) => setState(() => _marks[s.id] = v),
+                    sms: _day?.sms[s.id],
+                    onChanged: (v) => _setMark(s.id, v),
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -337,7 +559,7 @@ class _AttendanceViewState extends State<AttendanceView> {
                   child: SizedBox(
                     height: 42,
                     child: ElevatedButton.icon(
-                      onPressed: _smsAbsentParents,
+                      onPressed: canSave ? _smsAbsentParents : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.danger,
                       ),
@@ -400,10 +622,14 @@ class _StudentAttendanceCard extends StatelessWidget {
     required this.student,
     required this.status,
     required this.onChanged,
+    this.sms,
   });
 
   final Student student;
   final AttendanceStatus status;
+
+  /// Absence SMS for this day: sent / pending / failed / dismissed / null.
+  final String? sms;
   final ValueChanged<AttendanceStatus> onChanged;
 
   static Color _activeColor(AttendanceStatus s) => switch (s) {
@@ -453,6 +679,14 @@ class _StudentAttendanceCard extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (sms == 'sent')
+                  const _SmsChip('SMS sent', Icons.done_all, AppColors.success)
+                else if (sms == 'pending' || sms == 'failed')
+                  const _SmsChip(
+                    'SMS waiting',
+                    Icons.schedule,
+                    AppColors.warning,
+                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -501,4 +735,35 @@ class _StudentAttendanceCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SmsChip extends StatelessWidget {
+  const _SmsChip(this.label, this.icon, this.color);
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: .12),
+      borderRadius: BorderRadius.circular(9),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: color,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ),
+  );
 }

@@ -40,7 +40,10 @@ class Api {
 
   /// Called with the server's message when the institute's trial/plan ended
   /// or it was blocked (403 ACCESS_EXPIRED / ACCESS_BLOCKED).
-  void Function(String message)? onAccessDenied;
+  void Function(String code, String message)? onAccessDenied;
+
+  /// Called when the signed-in staff login was blocked by the admin.
+  void Function(String message)? onAccountBlocked;
 
   /// Replaceable in tests (e.g. with `MockClient` from package:http/testing).
   http.Client client = http.Client();
@@ -101,8 +104,11 @@ class Api {
     if (res.statusCode == 401 && code == 'UNAUTHORIZED' && token != null) {
       onUnauthorized?.call();
     }
+    if (code == 'ACCOUNT_BLOCKED' && token != null) {
+      onAccountBlocked?.call(message);
+    }
     if (code == 'ACCESS_EXPIRED' || code == 'ACCESS_BLOCKED') {
-      onAccessDenied?.call(message);
+      onAccessDenied?.call(code, message);
     }
     throw ApiException(message, code: code, status: res.statusCode);
   }

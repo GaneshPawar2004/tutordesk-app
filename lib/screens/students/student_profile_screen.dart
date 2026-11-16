@@ -4,6 +4,7 @@ import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
+import '../../widgets/common.dart';
 import '../fees/collect_fee_dialog.dart';
 import 'student_form_dialog.dart';
 import 'students_view.dart';
@@ -258,6 +259,25 @@ class _PaymentHistoryState extends State<_PaymentHistory> {
     widget.student,
   );
 
+  /// Removes a wrong payment (the list reloads because feesPaid changes).
+  Future<void> _delete(FeePayment p) async {
+    final ok = await confirmDialog(
+      context,
+      title: 'Delete payment?',
+      message:
+          '${formatMoney(p.amount)} paid on ${formatDate(p.paidAt)} will be removed '
+          'and added back to the due amount.',
+    );
+    if (!ok || !mounted) return;
+    if (await runApi(
+          context,
+          () => appState.deletePayment(widget.student, p),
+        ) &&
+        mounted) {
+      showSuccess(context, 'Payment deleted');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<FeePayment>>(
@@ -311,6 +331,16 @@ class _PaymentHistoryState extends State<_PaymentHistory> {
                       paidAt: p.paidAt,
                     ),
                   ),
+                  if (appState.isOwner)
+                    IconButton(
+                      tooltip: 'Delete payment',
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: AppColors.danger,
+                      ),
+                      onPressed: () => _delete(p),
+                    ),
                 ],
               ),
           ],

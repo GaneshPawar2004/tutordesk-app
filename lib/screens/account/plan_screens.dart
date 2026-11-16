@@ -25,6 +25,23 @@ class AccessScreen extends StatefulWidget {
 class _AccessScreenState extends State<AccessScreen> {
   bool _checking = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // Get the exact status (blocked / plan ended / trial ended) quietly.
+    appState.recheckAccess().then((_) {
+      if (!mounted) return;
+      if (appState.accessAllowed) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const HomeShell()),
+          (_) => false,
+        );
+      } else {
+        setState(() {});
+      }
+    }, onError: (_) {});
+  }
+
   Future<void> _retry() async {
     setState(() => _checking = true);
     try {
@@ -70,7 +87,11 @@ class _AccessScreenState extends State<AccessScreen> {
             ),
             const SizedBox(height: 18),
             Text(
-              blocked ? 'Account paused' : 'Free trial has ended',
+              blocked
+                  ? 'Account paused'
+                  : appState.accessStatus == 'active'
+                  ? 'Your plan has ended'
+                  : 'Free trial has ended',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
             ),

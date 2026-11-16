@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/common.dart';
 import '../attendance/attendance_view.dart';
 import '../fees/fees_view.dart';
 import '../students/students_view.dart';
@@ -23,7 +24,30 @@ class ClassDetailScreen extends StatefulWidget {
 class _ClassDetailScreenState extends State<ClassDetailScreen> {
   ClassTab? _tab;
 
-  void _select(ClassTab? tab) => setState(() => _tab = tab);
+  /// True while the Attendance tab has unsaved marks.
+  final _attendanceUnsaved = ValueNotifier(false);
+
+  @override
+  void dispose() {
+    _attendanceUnsaved.dispose();
+    super.dispose();
+  }
+
+  /// Switches tab; asks first when leaving unsaved attendance.
+  Future<void> _select(ClassTab? tab) async {
+    if (tab == _tab) return;
+    if (_tab == ClassTab.attendance && _attendanceUnsaved.value) {
+      final leave = await confirmDialog(
+        context,
+        title: 'Discard attendance changes?',
+        message: 'Your attendance changes are not saved yet.',
+        confirmLabel: 'DISCARD',
+      );
+      if (!leave || !mounted) return;
+      _attendanceUnsaved.value = false;
+    }
+    setState(() => _tab = tab);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +61,7 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
         schoolClass: c,
         onBack: backToStudents,
         bottomBar: bar,
+        unsaved: _attendanceUnsaved,
       ),
       ClassTab.tests => TestsView(
         schoolClass: c,

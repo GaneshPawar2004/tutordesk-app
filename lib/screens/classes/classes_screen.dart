@@ -46,17 +46,19 @@ class _ClassesScreenState extends State<ClassesScreen> {
               title: const Text('Rename class'),
               onTap: () => Navigator.pop(ctx, 'rename'),
             ),
-            ListTile(
-              leading: const Icon(
-                Icons.delete_outline,
-                color: AppColors.danger,
+            // Only the admin can delete classes.
+            if (appState.isOwner)
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.danger,
+                ),
+                title: const Text(
+                  'Delete class',
+                  style: TextStyle(color: AppColors.danger),
+                ),
+                onTap: () => Navigator.pop(ctx, 'delete'),
               ),
-              title: const Text(
-                'Delete class',
-                style: TextStyle(color: AppColors.danger),
-              ),
-              onTap: () => Navigator.pop(ctx, 'delete'),
-            ),
           ],
         ),
       ),

@@ -413,10 +413,12 @@ void showError(BuildContext context, String message) {
 /// Placeholder for actions that need the backend / native integrations.
 /// Runs a server call behind a blocking progress spinner. Returns its value,
 /// or null after showing the error to the user.
+/// [rethrowIf]: errors the caller handles itself (thrown on, not shown).
 Future<T?> runApiValue<T>(
   BuildContext context,
-  Future<T> Function() call,
-) async {
+  Future<T> Function() call, {
+  bool Function(Object error)? rethrowIf,
+}) async {
   final navigator = Navigator.of(context, rootNavigator: true);
   final messenger = ScaffoldMessenger.of(context);
   showDialog<void>(
@@ -431,6 +433,7 @@ Future<T?> runApiValue<T>(
   try {
     return await call();
   } catch (e) {
+    if (rethrowIf?.call(e) ?? false) rethrow;
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
