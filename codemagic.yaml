@@ -1,0 +1,76 @@
+# Codemagic builds for Kaksha (https://codemagic.io). Start builds by hand from
+# the Codemagic dashboard: pick the workflow, branch "main", Start new build.
+
+workflows:
+  # Works without an Apple Developer account: proves the app builds for iOS.
+  # The result cannot be installed on an iPhone (Apple requires signing).
+  ios-check:
+    name: iOS build check (no signing)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: 3.44.1
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Analyze
+        script: flutter analyze
+      - name: Build iOS (unsigned)
+        script: flutter build ios --release --no-codesign
+    artifacts:
+      - build/ios/iphoneos/*.app
+
+  # Needs an Apple Developer account ($99/year). One-time setup:
+  #  1. developer.apple.com: register the App ID com.intellectualdigital.teachersApp.
+  #  2. appstoreconnect.apple.com: create the app "Kaksha" with that bundle id.
+  #  3. App Store Connect → Users and Access → Integrations → create an API key
+  #     (role App Manager); in Codemagic → Team settings → Integrations →
+  #     Developer Portal, add it with the name "Kaksha ASC key".
+  # Then run this workflow: Codemagic creates the signing certificate and
+  # profile, builds the .ipa and sends it to TestFlight.
+  ios-testflight:
+    name: iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: Kaksha ASC key
+    environment:
+      flutter: 3.44.1
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.intellectualdigital.teachersApp
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Use signing profiles
+        script: xcode-project use-profiles
+      - name: Build signed .ipa
+        script: |
+          flutter build ipa --release \
+            --build-number=$BUILD_NUMBER \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+
+  # Android APK (same as building on the PC), handy for sharing.
+  android-apk:
+    name: Android APK
+    instance_type: linux_x2
+    max_build_duration: 30
+    environment:
+      flutter: 3.44.1
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Build APK
+        script: flutter build apk --release
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
