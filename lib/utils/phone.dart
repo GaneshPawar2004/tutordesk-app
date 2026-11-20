@@ -23,8 +23,16 @@ Future<void> openSms(
   List<String> numbers,
   String message,
 ) async {
+  final body = Uri.encodeComponent(message);
+  // iPhone's Messages app reads the text after "&body=" (and several numbers
+  // via /open?addresses=); Android uses "?body=".
+  final ios = !kIsWeb && Platform.isIOS;
   final uri = Uri.parse(
-    'sms:${numbers.join(',')}?body=${Uri.encodeComponent(message)}',
+    !ios
+        ? 'sms:${numbers.join(',')}?body=$body'
+        : numbers.length == 1
+        ? 'sms:${numbers.first}&body=$body'
+        : 'sms:/open?addresses=${numbers.join(',')}&body=$body',
   );
   final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
   if (!ok && context.mounted) showError(context, 'Could not open SMS app.');

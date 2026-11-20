@@ -19,6 +19,7 @@ String _num(double v) => v == v.roundToDouble() ? '${v.toInt()}' : '$v';
 /// Shares a CSV (opens in Excel / Google Sheets) of the class: student
 /// details, fees (with fee access) and marks of every test.
 Future<void> exportClass(BuildContext context, SchoolClass c) async {
+  final origin = _shareOrigin(context);
   final students = appState.studentsOf(c.id)
     ..sort((a, b) => a.rollNumber.compareTo(b.rollNumber));
   if (students.isEmpty) {
@@ -68,8 +69,17 @@ Future<void> exportClass(BuildContext context, SchoolClass c) async {
       files: [XFile.fromData(bytes, mimeType: 'text/csv', name: name)],
       fileNameOverrides: [name],
       subject: '${c.name} – students',
+      sharePositionOrigin: origin,
     ),
   );
+}
+
+/// Where the share sheet points from; iPads crash without it.
+Rect? _shareOrigin(BuildContext context) {
+  final box = context.findRenderObject() as RenderBox?;
+  return box == null || !box.hasSize
+      ? null
+      : box.localToGlobal(Offset.zero) & box.size;
 }
 
 String _markText(StudentMark? m) {
@@ -80,6 +90,7 @@ String _markText(StudentMark? m) {
 /// Shares a text report of one student (details, attendance, fees, marks),
 /// e.g. to a parent on WhatsApp.
 Future<void> exportStudent(BuildContext context, Student s) async {
+  final origin = _shareOrigin(context);
   final c = appState.classById(s.classId);
   final summary = await runApiValue(
     context,
@@ -104,6 +115,10 @@ Future<void> exportStudent(BuildContext context, Student s) async {
   ];
   if (marks.isNotEmpty) lines.addAll(['', '📝 Test marks:', ...marks]);
   await SharePlus.instance.share(
-    ShareParams(text: lines.join('\n'), subject: '${s.name} – report'),
+    ShareParams(
+      text: lines.join('\n'),
+      subject: '${s.name} – report',
+      sharePositionOrigin: origin,
+    ),
   );
 }
