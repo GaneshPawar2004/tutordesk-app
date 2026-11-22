@@ -98,6 +98,14 @@ class StudentProfileScreen extends StatelessWidget {
                     child: const Text('COLLECT'),
                   ),
                   children: [
+                    if (s.hasMonthlyFee)
+                      _Row(
+                        'Monthly fee',
+                        '${formatMoney(s.monthlyFee)} × ${s.monthsBilled} month(s) '
+                            'from ${formatMonth(s.feeStart)}',
+                      ),
+                    if (s.hasMonthlyFee && s.oneTimeFees > 0)
+                      _Row('One-time fees', formatMoney(s.oneTimeFees)),
                     _Row('Total fees', formatMoney(s.totalFees)),
                     _Row('Paid', formatMoney(s.feesPaid)),
                     _Row(
@@ -316,20 +324,17 @@ class _PaymentHistoryState extends State<_PaymentHistory> {
                 children: [
                   Expanded(
                     child: Text(
+                      '${p.receiptNo == null ? '' : '#${p.receiptNo}  ·  '}'
                       '${formatDate(p.paidAt)}  ·  ${formatMoney(p.amount)}'
                       '${p.collectedBy.isEmpty ? '' : '  ·  ${p.collectedBy}'}',
                       style: const TextStyle(fontSize: 13),
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Send receipt',
+                    tooltip: 'Receipt',
                     icon: const Icon(Icons.receipt_long_outlined, size: 20),
-                    onPressed: () => sendReceipt(
-                      context,
-                      widget.student,
-                      amount: p.amount,
-                      paidAt: p.paidAt,
-                    ),
+                    onPressed: () =>
+                        showReceiptOptions(context, widget.student, p),
                   ),
                   if (appState.isOwner)
                     IconButton(

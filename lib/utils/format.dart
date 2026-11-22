@@ -20,3 +20,25 @@ String maskEmail(String email) {
   final name = parts[0];
   return '${name.substring(0, 2)}${'*' * (name.length - 2)}@${parts[1]}';
 }
+
+const _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// "2026-08" → "Aug 2026".
+String formatMonth(String? yyyyMm) {
+  final m = RegExp(r'^(\d{4})-(\d{2})').firstMatch(yyyyMm ?? '');
+  if (m == null) return '';
+  return '${_months[int.parse(m[2]!) - 1]} ${m[1]}';
+}

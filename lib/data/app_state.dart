@@ -27,6 +27,12 @@ class AppState extends ChangeNotifier {
   bool canAccessFees = true;
   int trialDaysRemaining = 0;
   String instituteName = '';
+  String institutePhone = '';
+  String instituteAddress = '';
+  DateTime? logoUpdatedAt;
+
+  /// Institute setting: students can have a monthly fee.
+  bool monthlyFees = false;
 
   // Access of the whole institute (trial / allowed from the admin page / blocked).
   String accessStatus = 'trial';
@@ -141,6 +147,10 @@ class AppState extends ChangeNotifier {
 
   void _applyInstitute(Map<String, dynamic> inst) {
     instituteName = inst['name'] as String? ?? '';
+    institutePhone = inst['phone'] as String? ?? '';
+    instituteAddress = inst['address'] as String? ?? '';
+    logoUpdatedAt = parseDate(inst['logoUpdatedAt']);
+    monthlyFees = inst['monthlyFees'] as bool? ?? false;
     trialDaysRemaining = (inst['trialDaysRemaining'] as num?)?.toInt() ?? 0;
     final access = inst['access'] as Map<String, dynamic>? ?? const {};
     accessStatus = access['status'] as String? ?? 'trial';
@@ -182,10 +192,20 @@ class AppState extends ChangeNotifier {
 
   // ---- My profile ----------------------------------------------------------
   /// [instituteName] only for the owner.
-  Future<void> updateProfile({String? name, String? instituteName}) async {
+  /// Institute fields are for the admin only.
+  Future<void> updateProfile({
+    String? name,
+    String? instituteName,
+    String? institutePhone,
+    String? instituteAddress,
+    bool? monthlyFees,
+  }) async {
     final res = await api.patch('/account', {
       'name': ?name,
       'instituteName': ?instituteName,
+      'institutePhone': ?institutePhone,
+      'instituteAddress': ?instituteAddress,
+      'monthlyFees': ?monthlyFees,
     });
     _applySession(res);
     notifyListeners();
@@ -200,6 +220,68 @@ class AppState extends ChangeNotifier {
     api.token = res['token'] as String;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_tokenKey, api.token!);
+  }
+
+  // ---- Institute logo (receipts) --------------------------------------------
+  /// Logo address (changes when the logo changes), or null without a logo.
+  String? get logoUrl => logoUpdatedAt == null
+      ? null
+      : '$apiBaseUrl/account/logo?v=${logoUpdatedAt!.millisecondsSinceEpoch}';
+
+  /// Admin only. [bytes]: an already-shrunk JPEG/PNG.
+  Future<void> uploadLogo(List<int> bytes) async {
+    _applyInstitute(
+      (await api.put('/account/logo', {
+        'image': base64Encode(bytes),
+      }))['institute'],
+    );
+    _logoBytes = null;
+    notifyListeners();
+  }
+
+  Future<void> removeLogo() async {
+    _applyInstitute((await api.delete('/account/logo'))['institute']);
+    _logoBytes = null;
+    notifyListeners();
+  }
+
+  ({DateTime? version, List<int> bytes})? _logoBytes;
+
+  /// The logo's bytes for PDF receipts (cached), or null without a logo.
+  Future<List<int>?> logoBytes() async {
+    final url = logoUrl;
+    if (url == null) return null;
+    if (_logoBytes case final c? when c.version == logoUpdatedAt) {
+      return c.bytes;
+    }
+    try {
+      final res = await api.client
+          .get(Uri.parse(url), headers: authHeaders)
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) return null;
+      _logoBytes = (version: logoUpdatedAt, bytes: res.bodyBytes);
+      return res.bodyBytes;
+    } catch (_) {
+      return null; // receipt without logo
+    }
+  }
+
+  /// Copies students' details (not fees/attendance/marks) into [to].
+  /// Returns how many were copied and who was skipped (roll number taken).
+  Future<({int copied, List<String> skipped})> copyStudents(
+    String fromClassId,
+    String to,
+    List<String> studentIds,
+  ) async {
+    final res = await api.post('/classes/$fromClassId/students/copy', {
+      'to': to,
+      'students': studentIds,
+    });
+    await loadAll();
+    return (
+      copied: (res['copied'] as num).toInt(),
+      skipped: [for (final n in res['skipped'] as List) n as String],
+    );
   }
 
   /// Owner only: deletes the institute with all its data, then signs out.
@@ -376,6 +458,8 @@ class AppState extends ChangeNotifier {
     required DateTime? dateOfBirth,
     required double totalFees,
     required DateTime? feesDueDate,
+    double monthlyFee = 0,
+    String? feeStart,
   }) => {
     'name': name,
     'fatherName': fatherName,
@@ -387,6 +471,10 @@ class AppState extends ChangeNotifier {
     if (canAccessFees) ...{
       'totalFees': totalFees,
       'feesDueDate': feesDueDate == null ? null : dateKey(feesDueDate),
+      if (monthlyFees) ...{
+        'monthlyFee': monthlyFee,
+        'feeStart': monthlyFee > 0 ? feeStart : null,
+      },
     },
   };
 
@@ -427,7 +515,8 @@ class AppState extends ChangeNotifier {
   final Map<String, ({String ref, double amount})> _unconfirmedPayments = {};
   var _refSeq = 0;
 
-  Future<void> collectFee(Student s, double amount) async {
+  /// Records a payment; returns it (with its receipt number) for the receipt.
+  Future<FeePayment> collectFee(Student s, double amount) async {
     final last = _unconfirmedPayments[s.id];
     final ref = last != null && last.amount == amount
         ? last.ref
@@ -441,6 +530,15 @@ class AppState extends ChangeNotifier {
       _unconfirmedPayments.remove(s.id);
       _assignStudent(s, res['student']);
       notifyListeners();
+      final p = res['payment'] as Map<String, dynamic>;
+      return FeePayment(
+        id: p['id'] as String,
+        amount: (p['amount'] as num).toDouble(),
+        paidAt: parseDate(p['paidAt']) ?? DateTime.now(),
+        note: p['note'] as String? ?? '',
+        collectedBy: userName ?? '',
+        receiptNo: (p['receiptNo'] as num?)?.toInt(),
+      );
     } on ApiException catch (e) {
       // A real answer from the server (e.g. "exceeds due") means it was not saved.
       if (e.status != 0) _unconfirmedPayments.remove(s.id);
@@ -599,6 +697,10 @@ class AppState extends ChangeNotifier {
     if (json.containsKey('totalFees')) {
       s
         ..totalFees = f.totalFees
+        ..oneTimeFees = f.oneTimeFees
+        ..monthlyFee = f.monthlyFee
+        ..feeStart = f.feeStart
+        ..monthsBilled = f.monthsBilled
         ..feesPaid = f.feesPaid
         ..feesDueDate = f.feesDueDate;
     }
@@ -645,6 +747,11 @@ class AppState extends ChangeNotifier {
         for (final r in records)
           if (r['sms'] case final String s) r['student'] as String: s,
       },
+      notes: {
+        for (final r in records)
+          if (r['note'] case final String n when n.isNotEmpty)
+            r['student'] as String: n,
+      },
       changes: [
         for (final c in (res['changes'] as List? ?? const []))
           AttendanceChange(
@@ -672,13 +779,18 @@ class AppState extends ChangeNotifier {
     DateTime date,
     Map<String, AttendanceStatus> marks, {
     required int? version,
+    Map<String, String> notes = const {},
   }) async {
     final res = await api.put('/classes/$classId/attendance', {
       'date': dateKey(date),
       'version': version,
       'records': [
         for (final e in marks.entries)
-          {'student': e.key, 'status': e.value.name},
+          {
+            'student': e.key,
+            'status': e.value.name,
+            if (e.value == AttendanceStatus.others) 'note': notes[e.key] ?? '',
+          },
       ],
     });
     _invalidateAttendance();

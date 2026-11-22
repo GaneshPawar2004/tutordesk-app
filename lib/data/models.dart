@@ -30,6 +30,10 @@ class Student {
     this.feesPaid = 0,
     this.disabled = false,
     this.photoUpdatedAt,
+    this.oneTimeFees = 0,
+    this.monthlyFee = 0,
+    this.feeStart,
+    this.monthsBilled = 0,
   });
 
   /// Fee fields are missing for staff without fee access; they read as 0.
@@ -48,6 +52,10 @@ class Student {
     feesPaid: _num(j['feesPaid']),
     disabled: j['disabled'] as bool? ?? false,
     photoUpdatedAt: parseDate(j['photoUpdatedAt']),
+    oneTimeFees: _num(j['oneTimeFees'] ?? j['totalFees']),
+    monthlyFee: _num(j['monthlyFee']),
+    feeStart: j['feeStart'] as String?,
+    monthsBilled: (j['monthsBilled'] as num?)?.toInt() ?? 0,
   );
 
   final String id;
@@ -67,6 +75,16 @@ class Student {
   /// Null when the student has no photo.
   DateTime? photoUpdatedAt;
 
+  // Monthly fees system: [totalFees] = [oneTimeFees] + [monthlyFee] × [monthsBilled].
+  double oneTimeFees;
+  double monthlyFee;
+
+  /// First billed month, "YYYY-MM" (null without a monthly fee).
+  String? feeStart;
+  int monthsBilled;
+
+  bool get hasMonthlyFee => monthlyFee > 0 && feeStart != null;
+
   double get feesDue => (totalFees - feesPaid).clamp(0, double.infinity);
 
   int get rollNumber => int.tryParse(rollNo) ?? 1 << 30;
@@ -80,6 +98,7 @@ class FeePayment {
     required this.paidAt,
     this.note = '',
     this.collectedBy = '',
+    this.receiptNo,
   });
 
   factory FeePayment.fromJson(Map<String, dynamic> j) => FeePayment(
@@ -88,6 +107,7 @@ class FeePayment {
     paidAt: parseDate(j['paidAt']) ?? DateTime.now(),
     note: j['note'] as String? ?? '',
     collectedBy: j['collectedBy'] as String? ?? '',
+    receiptNo: (j['receiptNo'] as num?)?.toInt(),
   );
 
   final String id;
@@ -95,6 +115,9 @@ class FeePayment {
   final DateTime paidAt;
   final String note;
   final String collectedBy;
+
+  /// 1, 2, 3… per institute (null for payments saved before numbering).
+  final int? receiptNo;
 }
 
 class StaffUser {
@@ -313,6 +336,7 @@ class AttendanceDay {
     required this.savedMarks,
     required this.sms,
     required this.changes,
+    this.notes = const {},
     this.savedBy,
     this.savedAt,
   });
@@ -333,4 +357,7 @@ class AttendanceDay {
   /// studentId → absence SMS status for this date (sent / pending / failed / dismissed).
   final Map<String, String> sms;
   final List<AttendanceChange> changes;
+
+  /// studentId → reason for "others" (e.g. Sick).
+  final Map<String, String> notes;
 }

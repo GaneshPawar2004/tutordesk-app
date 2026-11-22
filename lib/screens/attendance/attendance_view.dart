@@ -68,15 +68,77 @@ class _AttendanceViewState extends State<AttendanceView> {
     return _students.any(
       (s) =>
           (_marks[s.id] ?? AttendanceStatus.present) !=
-          (day.marks[s.id] ?? AttendanceStatus.present),
+              (day.marks[s.id] ?? AttendanceStatus.present) ||
+          (_marks[s.id] == AttendanceStatus.others &&
+              (_notes[s.id] ?? '') != (day.notes[s.id] ?? '')),
     );
   }
 
+  /// studentId → reason for "Others" (e.g. Sick).
+  final Map<String, String> _notes = {};
+
   void _changed() => widget.unsaved?.value = _dirty;
 
-  void _setMark(String id, AttendanceStatus v) {
-    setState(() => _marks[id] = v);
+  Future<void> _setMark(String id, AttendanceStatus v) async {
+    if (v == AttendanceStatus.others) {
+      // Optional reason, e.g. Sick / Function at home.
+      final note = await _askNote(_notes[id] ?? '');
+      if (note == null || !mounted) return;
+      setState(() {
+        _marks[id] = v;
+        _notes[id] = note;
+      });
+    } else {
+      setState(() => _marks[id] = v);
+    }
     _changed();
+  }
+
+  Future<String?> _askNote(String initial) async {
+    final ctrl = TextEditingController(text: initial);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reason (optional)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Wrap(
+              spacing: 6,
+              children: [
+                for (final r in const [
+                  'Sick',
+                  'Function',
+                  'Out of town',
+                  'Late',
+                ])
+                  ActionChip(
+                    label: Text(r),
+                    onPressed: () => Navigator.pop(ctx, r),
+                  ),
+              ],
+            ),
+            TextField(
+              controller: ctrl,
+              maxLength: 100,
+              decoration: const InputDecoration(hintText: 'Type a reason…'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    return result;
   }
 
   /// Loads saved attendance for [_date]. While loading, or if it failed,
@@ -101,6 +163,7 @@ class _AttendanceViewState extends State<AttendanceView> {
         _day = day;
         for (final s in _students) {
           _marks[s.id] = day.marks[s.id] ?? AttendanceStatus.present;
+          _notes[s.id] = day.notes[s.id] ?? '';
         }
       });
     } catch (e) {
@@ -147,6 +210,12 @@ class _AttendanceViewState extends State<AttendanceView> {
           _date,
           Map.of(_marks),
           version: day.version,
+          notes: {
+            for (final e in _notes.entries)
+              if (_marks[e.key] == AttendanceStatus.others &&
+                  e.value.isNotEmpty)
+                e.key: e.value,
+          },
         ),
         rethrowIf: (e) => e is ApiException && e.code == 'ATTENDANCE_CHANGED',
       );
@@ -154,13 +223,35 @@ class _AttendanceViewState extends State<AttendanceView> {
       setState(() => _day = saved);
       _changed();
       if (!quiet) {
-        showNotice(
-          context,
-          '✅ Attendance saved for ${formatDate(_date)}.\n'
-          'Present: ${_count(AttendanceStatus.present)} · '
-          'Absent: ${_count(AttendanceStatus.absent)} · '
-          'Leave: ${_count(AttendanceStatus.leave)}',
-        );
+        final summary =
+            '✅ Attendance saved for ${formatDate(_date)}.\n'
+            'Present: ${_count(AttendanceStatus.present)} · '
+            'Absent: ${_count(AttendanceStatus.absent)} · '
+            'Leave: ${_count(AttendanceStatus.leave)}'
+            '${_count(AttendanceStatus.others) == 0 ? '' : ' · Others: ${_count(AttendanceStatus.others)}'}';
+        // Absentees whose parents have not got today's SMS yet.
+        final toNotify = _students
+            .where(
+              (s) =>
+                  saved.marks[s.id] == AttendanceStatus.absent &&
+                  saved.sms[s.id] != 'sent' &&
+                  saved.sms[s.id] != 'dismissed',
+            )
+            .length;
+        if (toNotify == 0) {
+          showNotice(context, summary);
+        } else {
+          final send = await confirmDialog(
+            context,
+            title: 'Attendance saved',
+            message:
+                '$summary\n\nSend SMS to the parents of $toNotify absent '
+                'student(s) now?',
+            confirmLabel: 'SEND SMS',
+            confirmColor: AppColors.primary,
+          );
+          if (send && mounted) await _smsAbsentParents();
+        }
       }
       return true;
     } on ApiException catch (e) {
@@ -539,6 +630,9 @@ class _AttendanceViewState extends State<AttendanceView> {
                     student: s,
                     status: _marks[s.id]!,
                     sms: _day?.sms[s.id],
+                    note: _marks[s.id] == AttendanceStatus.others
+                        ? _notes[s.id]
+                        : null,
                     onChanged: (v) => _setMark(s.id, v),
                   ),
                   const SizedBox(height: 12),
@@ -623,10 +717,14 @@ class _StudentAttendanceCard extends StatelessWidget {
     required this.status,
     required this.onChanged,
     this.sms,
+    this.note,
   });
 
   final Student student;
   final AttendanceStatus status;
+
+  /// Reason when marked "Others".
+  final String? note;
 
   /// Absence SMS for this day: sent / pending / failed / dismissed / null.
   final String? sms;
@@ -730,6 +828,19 @@ class _StudentAttendanceCard extends StatelessWidget {
                       .toList()
                     ..removeLast(),
             ),
+            if (note != null && note!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              InkWell(
+                onTap: () => onChanged(AttendanceStatus.others),
+                child: Text(
+                  'Reason: $note  ✎',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

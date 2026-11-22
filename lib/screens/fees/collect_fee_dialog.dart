@@ -5,6 +5,7 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../utils/phone.dart';
+import '../../utils/receipt_pdf.dart';
 import '../../widgets/common.dart';
 
 /// Records a fee payment for a student.
@@ -112,22 +113,78 @@ Future<void> showCollectFeeDialog(BuildContext context, Student s) async {
   );
 
   if (amount != null && context.mounted) {
-    if (await runApi(context, () => appState.collectFee(s, amount)) &&
-        context.mounted) {
+    final payment = await runApiValue(
+      context,
+      () => appState.collectFee(s, amount),
+    );
+    if (payment != null && context.mounted) {
       showSuccess(context, '${formatMoney(amount)} collected from ${s.name}');
-      final send = await confirmDialog(
+      await showReceiptOptions(
         context,
-        title: 'Send receipt?',
-        message:
-            'Send a payment receipt for ${formatMoney(amount)} to the parent of ${s.name} by SMS or WhatsApp?',
-        confirmLabel: 'SEND',
-        confirmColor: AppColors.primary,
+        s,
+        payment,
+        title: 'Send receipt for ${formatMoney(amount)}?',
       );
-      if (send && context.mounted) {
-        sendReceipt(context, s, amount: amount, paidAt: DateTime.now());
-      }
     }
   }
+}
+
+/// Receipt choices for a payment: PDF (share / print) or SMS/WhatsApp text.
+Future<void> showReceiptOptions(
+  BuildContext context,
+  Student s,
+  FeePayment p, {
+  String? title,
+}) async {
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 6),
+            child: Text(
+              title ??
+                  'Receipt ${p.receiptNo == null ? '' : 'No. ${p.receiptNo} '}· ${formatMoney(p.amount)}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.picture_as_pdf, color: AppColors.danger),
+            title: const Text('Share PDF receipt'),
+            subtitle: const Text('WhatsApp, email or save — with your logo'),
+            onTap: () => Navigator.pop(ctx, 'pdf'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.print_outlined),
+            title: const Text('Print receipt'),
+            onTap: () => Navigator.pop(ctx, 'print'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.sms_outlined, color: AppColors.primary),
+            title: const Text('Send as text (SMS / WhatsApp)'),
+            onTap: () => Navigator.pop(ctx, 'text'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.close),
+            title: const Text('Not now'),
+            onTap: () => Navigator.pop(ctx),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  if (choice == 'text') {
+    sendReceipt(context, s, amount: p.amount, paidAt: p.paidAt);
+    return;
+  }
+  await runApi(
+    context,
+    () => choice == 'pdf' ? shareReceiptPdf(s, p) : printReceiptPdf(s, p),
+  );
 }
 
 /// Text of a fee receipt for a payment of [amount] by [s].

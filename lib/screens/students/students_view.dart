@@ -5,7 +5,9 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/export.dart';
 import '../../widgets/common.dart';
+import '../classes/class_actions.dart';
 import '../classes/class_detail_screen.dart';
+import '../classes/import_class.dart';
 import 'student_actions_dialog.dart';
 import 'student_form_dialog.dart';
 import 'student_photo.dart';
@@ -79,8 +81,13 @@ class _StudentsViewState extends State<StudentsView> {
             icon: const Icon(Icons.file_download_outlined, size: 22),
             onPressed: () => exportClass(context, c),
           ),
-          PopupMenuButton<_SortBy>(
-            onSelected: (v) => setState(() => _sortBy = v),
+          PopupMenuButton<Object>(
+            onSelected: (v) {
+              if (v is _SortBy) setState(() => _sortBy = v);
+              if (v == 'message') showClassMessage(context, c);
+              if (v == 'copy') showCopyStudents(context, c);
+              if (v == 'import') importClassFile(context, into: c);
+            },
             itemBuilder: (_) => [
               CheckedPopupMenuItem(
                 value: _SortBy.roll,
@@ -92,6 +99,20 @@ class _StudentsViewState extends State<StudentsView> {
                 checked: _sortBy == _SortBy.name,
                 child: const Text('Sort by name'),
               ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'message',
+                child: Text('Send message to class'),
+              ),
+              const PopupMenuItem(
+                value: 'copy',
+                child: Text('Copy students to another class'),
+              ),
+              if (appState.isOwner)
+                const PopupMenuItem(
+                  value: 'import',
+                  child: Text('Import students (Teachers App CSV)'),
+                ),
             ],
           ),
         ],

@@ -42,11 +42,31 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
   );
   late final _roll = TextEditingController(text: widget.student?.rollNo);
   late final _email = TextEditingController(text: widget.student?.email);
+  // The stored (one-time) part — with monthly fees the total also has months.
   late final _fees = TextEditingController(
-    text: widget.student == null || widget.student!.totalFees == 0
+    text: widget.student == null || widget.student!.oneTimeFees == 0
         ? ''
-        : _plain(widget.student!.totalFees),
+        : _plain(widget.student!.oneTimeFees),
   );
+  late final _monthly = TextEditingController(
+    text: widget.student == null || widget.student!.monthlyFee == 0
+        ? ''
+        : _plain(widget.student!.monthlyFee),
+  );
+
+  /// First billed month (day ignored); defaults to this month.
+  late DateTime _feeStart = () {
+    final m = RegExp(
+      r'^(\d{4})-(\d{2})',
+    ).firstMatch(widget.student?.feeStart ?? '');
+    final now = DateTime.now();
+    return m == null
+        ? DateTime(now.year, now.month)
+        : DateTime(int.parse(m[1]!), int.parse(m[2]!));
+  }();
+
+  String get _feeStartKey =>
+      '${_feeStart.year}-${_feeStart.month.toString().padLeft(2, '0')}';
   late DateTime? _dob = widget.student?.dateOfBirth;
   late DateTime? _dueDate = widget.student?.feesDueDate;
 
@@ -65,7 +85,16 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
 
   @override
   void dispose() {
-    for (final c in [_name, _father, _contact, _parent, _roll, _email, _fees]) {
+    for (final c in [
+      _name,
+      _father,
+      _contact,
+      _parent,
+      _roll,
+      _email,
+      _fees,
+      _monthly,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -89,6 +118,8 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
       dateOfBirth: _dob,
       totalFees: double.tryParse(_fees.text.trim()) ?? 0,
       feesDueDate: _dueDate,
+      monthlyFee: double.tryParse(_monthly.text.trim()) ?? 0,
+      feeStart: _feeStartKey,
     );
     final photo = _newPhoto;
     final s = await runApiValue(context, () async {
@@ -237,10 +268,44 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
                       onChanged: (d) => setState(() => _dob = d),
                     ),
                     // Fee fields only with fee access (the server ignores them otherwise).
+                    if (appState.canAccessFees && appState.monthlyFees) ...[
+                      LabeledField(
+                        label: 'Monthly fee',
+                        hint: 'Fee per month (leave blank if none)',
+                        controller: _monthly,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        validator: (v) {
+                          final value = v?.trim() ?? '';
+                          if (value.isEmpty) return null;
+                          final n = double.tryParse(value);
+                          return (n == null || n < 0)
+                              ? 'Enter a valid amount'
+                              : null;
+                        },
+                      ),
+                      DatePickerField(
+                        label: 'Fees from (month)',
+                        value: _feeStart,
+                        helper:
+                            'Billed every month from this month (any day in it works).',
+                        onChanged: (d) => setState(
+                          () => _feeStart = DateTime(
+                            (d ?? DateTime.now()).year,
+                            (d ?? DateTime.now()).month,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (appState.canAccessFees) ...[
                       LabeledField(
-                        label: 'Total fees',
-                        hint: 'Enter total fees',
+                        label: appState.monthlyFees
+                            ? 'One-time fees (admission etc.)'
+                            : 'Total fees',
+                        hint: appState.monthlyFees
+                            ? 'Leave blank if none'
+                            : 'Enter total fees',
                         controller: _fees,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,

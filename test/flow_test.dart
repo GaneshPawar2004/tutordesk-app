@@ -172,7 +172,9 @@ void main() {
       find.textContaining('Present: 1 · Absent: 1 · Leave: 0'),
       findsOneWidget,
     );
-    await _tap(tester, find.text('OK'));
+    // Offers to SMS the absent student's parent right away; skip here.
+    expect(find.text('SEND SMS'), findsOneWidget);
+    await _tap(tester, find.text('CANCEL'));
     await tester.pumpAndSettle();
 
     // Tests: add a test → edit marks opens
@@ -209,8 +211,8 @@ void main() {
     await _tap(tester, find.text('COLLECT'));
     await tester.pumpAndSettle();
     // Offer to send a receipt to the parent; skip it here.
-    expect(find.text('Send receipt?'), findsOneWidget);
-    await _tap(tester, find.text('CANCEL'));
+    expect(find.text('Share PDF receipt'), findsOneWidget);
+    await _tap(tester, find.text('Not now'));
     await tester.pumpAndSettle();
     expect(find.text('₹25000'), findsOneWidget);
 

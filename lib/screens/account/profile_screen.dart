@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../data/app_state.dart';
 import '../../theme/app_theme.dart';
@@ -15,6 +16,8 @@ class ProfileScreen extends StatelessWidget {
     required String title,
     required String initial,
     required Future<void> Function(String) save,
+    bool optional = false,
+    int maxLines = 1,
   }) async {
     final ctrl = TextEditingController(text: initial);
     final formKey = GlobalKey<FormState>();
@@ -28,8 +31,10 @@ class ProfileScreen extends StatelessWidget {
             controller: ctrl,
             autofocus: true,
             textCapitalization: TextCapitalization.words,
-            validator: (v) =>
-                (v ?? '').trim().length < 2 ? 'Enter at least 2 letters' : null,
+            maxLines: maxLines,
+            validator: (v) => !optional && (v ?? '').trim().length < 2
+                ? 'Enter at least 2 letters'
+                : null,
           ),
         ),
         actions: [
@@ -51,6 +56,53 @@ class ProfileScreen extends StatelessWidget {
     if (value == null || value == initial || !context.mounted) return;
     if (await runApi(context, () => save(value)) && context.mounted) {
       showSuccess(context, 'Saved');
+    }
+  }
+
+  Future<void> _changeLogo(BuildContext context) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose logo from gallery'),
+              onTap: () => Navigator.pop(ctx, 'pick'),
+            ),
+            if (appState.logoUrl != null)
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.danger,
+                ),
+                title: const Text('Remove logo'),
+                onTap: () => Navigator.pop(ctx, 'remove'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !context.mounted) return;
+    if (choice == 'remove') {
+      await runApi(context, appState.removeLogo);
+      return;
+    }
+    final file = await ImagePicker()
+        .pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 400,
+          maxHeight: 400,
+          imageQuality: 85,
+        )
+        .catchError((_) => null);
+    if (file == null || !context.mounted) return;
+    final bytes = await file.readAsBytes();
+    if (!context.mounted) return;
+    if (await runApi(context, () => appState.uploadLogo(bytes)) &&
+        context.mounted) {
+      showSuccess(context, 'Logo saved — it will appear on receipts.');
     }
   }
 
@@ -252,6 +304,66 @@ class ProfileScreen extends StatelessWidget {
                           )
                         : null,
                   ),
+                  if (appState.isOwner) ...[
+                    ListTile(
+                      leading: const Icon(Icons.call_outlined),
+                      title: const Text('Institute phone'),
+                      subtitle: Text(
+                        appState.institutePhone.isEmpty
+                            ? 'Shown on receipts'
+                            : appState.institutePhone,
+                      ),
+                      trailing: const Icon(Icons.edit_outlined, size: 20),
+                      onTap: () => _editText(
+                        context,
+                        title: 'Institute phone',
+                        initial: appState.institutePhone,
+                        optional: true,
+                        save: (v) => appState.updateProfile(institutePhone: v),
+                      ),
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.place_outlined),
+                      title: const Text('Institute address'),
+                      subtitle: Text(
+                        appState.instituteAddress.isEmpty
+                            ? 'Shown on receipts'
+                            : appState.instituteAddress,
+                      ),
+                      trailing: const Icon(Icons.edit_outlined, size: 20),
+                      onTap: () => _editText(
+                        context,
+                        title: 'Institute address',
+                        initial: appState.instituteAddress,
+                        optional: true,
+                        maxLines: 3,
+                        save: (v) =>
+                            appState.updateProfile(instituteAddress: v),
+                      ),
+                    ),
+                    ListTile(
+                      leading: const _LogoThumb(),
+                      title: const Text('Institute logo'),
+                      subtitle: Text(
+                        appState.logoUrl == null
+                            ? 'Add a logo for receipts'
+                            : 'Shown on PDF receipts · tap to change',
+                      ),
+                      onTap: () => _changeLogo(context),
+                    ),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.calendar_month_outlined),
+                      title: const Text('Monthly fees system'),
+                      subtitle: const Text(
+                        'Students can have a monthly fee that is added every month.',
+                      ),
+                      value: appState.monthlyFees,
+                      onChanged: (v) => runApi(
+                        context,
+                        () => appState.updateProfile(monthlyFees: v),
+                      ),
+                    ),
+                  ],
                   ListTile(
                     leading: const Icon(Icons.workspace_premium_outlined),
                     title: const Text('Subscription'),
@@ -297,6 +409,28 @@ class ProfileScreen extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Small preview of the institute logo (or a placeholder icon).
+class _LogoThumb extends StatelessWidget {
+  const _LogoThumb();
+
+  @override
+  Widget build(BuildContext context) {
+    final url = appState.logoUrl;
+    if (url == null) return const Icon(Icons.image_outlined);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Image.network(
+        url,
+        headers: appState.authHeaders,
+        width: 32,
+        height: 32,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const Icon(Icons.image_outlined),
       ),
     );
   }

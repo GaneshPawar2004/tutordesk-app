@@ -294,7 +294,15 @@ class FakeApi {
       }
       if (seg.length == 4 && seg[3] == 'payments' && m == 'POST') {
         s['feesPaid'] = (s['feesPaid'] as num) + (body['amount'] as num);
-        return ok({'payment': {}, 'student': _student(s)}, 201);
+        return ok({
+          'payment': {
+            'id': 'pay-${s['feesPaid']}',
+            'amount': body['amount'],
+            'paidAt': DateTime.now().toIso8601String(),
+            'receiptNo': 1,
+          },
+          'student': _student(s),
+        }, 201);
       }
     }
 
