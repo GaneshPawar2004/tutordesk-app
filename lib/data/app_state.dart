@@ -314,6 +314,16 @@ class AppState extends ChangeNotifier {
     return c;
   }
 
+  /// Imports a whole class file (see utils/import_csv.dart); returns counts
+  /// {students, skipped, payments, attendanceDays, tests}.
+  Future<Map<String, dynamic>> importClass(
+    String classId,
+    Map<String, dynamic> body,
+  ) async {
+    final res = await api.post('/classes/$classId/import', body);
+    return Map<String, dynamic>.from(res['imported'] as Map);
+  }
+
   Future<void> renameClass(SchoolClass c, String name) async {
     await api.patch('/classes/${c.id}', {'name': name});
     c.name = name;

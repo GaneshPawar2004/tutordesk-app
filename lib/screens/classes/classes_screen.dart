@@ -5,6 +5,7 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/common.dart';
 import 'class_detail_screen.dart';
+import 'import_class.dart';
 
 class ClassesScreen extends StatefulWidget {
   const ClassesScreen({super.key, required this.onBack});
@@ -109,12 +110,25 @@ class _ClassesScreenState extends State<ClassesScreen> {
               icon: const Icon(Icons.search, size: 21),
               onPressed: () => setState(() => _searching = true),
             ),
+          // Bring a class over from Teachers App (or a Kaksha export).
+          if (appState.isOwner)
+            IconButton(
+              tooltip: 'Import class',
+              icon: const Icon(Icons.upload_file, size: 22),
+              onPressed: () => importClassFile(context),
+            ),
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'sort') appState.sortClassesByName();
+              if (v == 'import') importClassFile(context);
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'sort', child: Text('Sort by name')),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'sort', child: Text('Sort by name')),
+              if (appState.isOwner)
+                const PopupMenuItem(
+                  value: 'import',
+                  child: Text('Import class (Teachers App CSV)'),
+                ),
             ],
           ),
         ],
