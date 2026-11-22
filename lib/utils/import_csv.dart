@@ -225,7 +225,12 @@ ClassImport _teachersApp(
     final attendance = <String, String>{};
     dateCols.forEach((i, date) {
       final v = at(i);
-      if (v.isNotEmpty) attendance[date] = _status(v);
+      if (v.isEmpty) return;
+      // Anything else is "Others" with that text as the reason (e.g. Sick).
+      final st = _status(v);
+      attendance[date] = st == 'others' && v.toLowerCase() != 'others'
+          ? (v.length > 100 ? v.substring(0, 100) : v)
+          : st;
     });
     final index = students.length;
     testCols.forEach((i, t) {

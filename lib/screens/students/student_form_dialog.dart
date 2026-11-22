@@ -54,19 +54,13 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
         : _plain(widget.student!.monthlyFee),
   );
 
-  /// First billed month (day ignored); defaults to this month.
-  late DateTime _feeStart = () {
-    final m = RegExp(
-      r'^(\d{4})-(\d{2})',
-    ).firstMatch(widget.student?.feeStart ?? '');
-    final now = DateTime.now();
-    return m == null
-        ? DateTime(now.year, now.month)
-        : DateTime(int.parse(m[1]!), int.parse(m[2]!));
-  }();
+  /// Fees start date: dues accrue monthly from it. Defaults to today (when
+  /// the student is added); older month-only values start on the 1st.
+  late DateTime _feeStart =
+      parseFeeStart(widget.student?.feeStart) ??
+      DateUtils.dateOnly(DateTime.now());
 
-  String get _feeStartKey =>
-      '${_feeStart.year}-${_feeStart.month.toString().padLeft(2, '0')}';
+  String get _feeStartKey => AppState.dateKey(_feeStart);
   late DateTime? _dob = widget.student?.dateOfBirth;
   late DateTime? _dueDate = widget.student?.feesDueDate;
 
@@ -286,14 +280,13 @@ class _StudentFormDialogState extends State<_StudentFormDialog> {
                         },
                       ),
                       DatePickerField(
-                        label: 'Fees from (month)',
+                        label: 'Fees start date',
                         value: _feeStart,
                         helper:
-                            'Billed every month from this month (any day in it works).',
+                            'Dues accrue monthly from this date (defaults to when the student was added).',
                         onChanged: (d) => setState(
-                          () => _feeStart = DateTime(
-                            (d ?? DateTime.now()).year,
-                            (d ?? DateTime.now()).month,
+                          () => _feeStart = DateUtils.dateOnly(
+                            d ?? DateTime.now(),
                           ),
                         ),
                       ),

@@ -102,7 +102,7 @@ class StudentProfileScreen extends StatelessWidget {
                       _Row(
                         'Monthly fee',
                         '${formatMoney(s.monthlyFee)} × ${s.monthsBilled} month(s) '
-                            'from ${formatMonth(s.feeStart)}',
+                            'from ${formatFeeStart(s.feeStart)}',
                       ),
                     if (s.hasMonthlyFee && s.oneTimeFees > 0)
                       _Row('One-time fees', formatMoney(s.oneTimeFees)),

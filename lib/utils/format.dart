@@ -42,3 +42,16 @@ String formatMonth(String? yyyyMm) {
   if (m == null) return '';
   return '${_months[int.parse(m[2]!) - 1]} ${m[1]}';
 }
+
+/// Fees start: "YYYY-MM-DD", or an older month-only "YYYY-MM" (the 1st).
+DateTime? parseFeeStart(String? v) {
+  final m = RegExp(r'^(\d{4})-(\d{2})(?:-(\d{2}))?$').firstMatch(v ?? '');
+  if (m == null) return null;
+  return DateTime(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3] ?? '1'));
+}
+
+/// "2026-09-15" -> "15-09-2026"; month-only values -> "Sep 2026".
+String formatFeeStart(String? v) {
+  final m = RegExp(r'^\d{4}-\d{2}$').hasMatch(v ?? '');
+  return m ? formatMonth(v) : formatDate(parseFeeStart(v));
+}

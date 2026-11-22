@@ -421,6 +421,8 @@ Future<T?> runApiValue<T>(
 }) async {
   final navigator = Navigator.of(context, rootNavigator: true);
   final messenger = ScaffoldMessenger.of(context);
+  // A snackbar would be hidden behind a dialog/sheet; show a popup there.
+  final inPopup = ModalRoute.of(context) is PopupRoute;
   showDialog<void>(
     context: context,
     barrierDismissible: false,
@@ -430,21 +432,40 @@ Future<T?> runApiValue<T>(
       child: Center(child: CircularProgressIndicator()),
     ),
   );
+  Object? error;
   try {
     return await call();
   } catch (e) {
     if (rethrowIf?.call(e) ?? false) rethrow;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('$e', style: const TextStyle(fontSize: 13)),
-          backgroundColor: AppColors.danger,
-        ),
-      );
+    error = e;
     return null;
   } finally {
     navigator.pop();
+    if (error != null) {
+      if (inPopup && context.mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            content: Text('$error', style: const TextStyle(fontSize: 14)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text('$error', style: const TextStyle(fontSize: 13)),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+      }
+    }
   }
 }
 
